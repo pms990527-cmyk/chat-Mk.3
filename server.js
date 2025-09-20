@@ -1,11 +1,11 @@
 /**
  * Mini 1:1 Chat — Node.js + Socket.IO
  * Cloud Cat theme + attachments + emoji panel (동물 단일, 조합모드 옵션)
- * Join 안정화:
- *  - 클라이언트: io({transports:['websocket','polling'], path:'/socket.io', timeout:10000})
- *  - connect_error / reconnect 피드백 및 버튼 재활성화
- *  - join_error 경고 표시
- * 시각: 버블 텍스트 외곽선 영구 차단
+ * Layout fix:
+ *  - .card: height:100dvh/100svh 로 뷰포트 고정
+ *  - .chat: min-height:0 + overflow:auto 로 내용만 스크롤
+ * Join 안정화: connect_error/timeout 처리, 버튼 복구
+ * 텍스트 외곽선 제거: 강제 오버라이드
  */
 const express = require('express');
 const http = require('http');
@@ -41,7 +41,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = "v-2025-09-21-09";
+const APP_VERSION = "v-2025-09-21-10";
 
 app.get('/healthz', (_, res) => res.status(200).type('text/plain').send('ok'));
 
@@ -63,7 +63,20 @@ app.get('/', (req, res) => {
     html,body{height:100%}
     body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial;background:linear-gradient(180deg,var(--sky-100),var(--white));color:var(--ink)}
     .wrap{max-width:720px;margin:0 auto;min-height:100%;padding:0 12px}
-    .card{min-height:100vh;background:rgba(255,255,255,.85);backdrop-filter:blur(6px);border:1px solid rgba(14,165,233,.12);border-radius:24px;box-shadow:0 12px 40px rgba(2,6,23,.08);overflow:hidden;display:flex;flex-direction:column}
+
+    /* 뷰포트 고정 카드: 더 길어지지 않게 */
+    .card{
+      height:100dvh;               /* 최신 브라우저 */
+      height:100svh;               /* iOS 주소창 요동 보정 */
+      background:rgba(255,255,255,.85);
+      backdrop-filter:blur(6px);
+      border:1px solid rgba(14,165,233,.12);
+      border-radius:24px;
+      box-shadow:0 12px 40px rgba(2,6,23,.08);
+      overflow:hidden;
+      display:flex;
+      flex-direction:column;
+    }
 
     .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:rgba(255,255,255,.9);border-bottom:1px solid rgba(14,165,233,.18)}
     .brand{display:flex;gap:10px;align-items:center}
@@ -72,7 +85,14 @@ app.get('/', (req, res) => {
     .subtitle{font-size:12px;color:var(--muted);font-family:ui-serif, Georgia, serif}
     .status{display:flex;gap:6px;align-items:center;color:#0284c7;font-size:12px;font-family:ui-serif, Georgia, serif}
 
-    .chat{flex:1;overflow:auto;background:linear-gradient(180deg,var(--sky-50),var(--white));padding:14px 14px 110px 14px}
+    /* 채팅 영역: 내용만 스크롤 */
+    .chat{
+      flex:1;
+      min-height:0;                /* flex 자식 키 늘리기 금지 */
+      overflow:auto;               /* 내용이 위로 밀리고 스크롤 */
+      background:linear-gradient(180deg,var(--sky-50),var(--white));
+      padding:14px 14px 110px 14px;
+    }
     .divider{display:flex;align-items:center;gap:8px;margin:8px 0}
     .divider .line{height:1px;background:rgba(14,165,233,.35);flex:1}
     .divider .txt{font-size:12px;color:#0ea5e9;font-family:ui-serif, Georgia, serif}
@@ -210,7 +230,6 @@ app.get('/', (req, res) => {
       url.searchParams.set('room', r);
       invite.textContent = url.toString();
     }
-
     $('#makeLink').onclick = () => {
       const r = roomInput.value.trim();
       if(!r){ alert('방 코드를 입력하세요'); return; }
@@ -341,7 +360,6 @@ app.get('/', (req, res) => {
 
       socket.on('joined', (info)=>{
         joined = true; clearTimeout(joinGuard); online.textContent = 'online';
-        // emoji click-to-send에서 참조
         window.socket = socket; window.myRoom = myRoom; window.myNick = myNick;
         setInviteLink(myRoom);
         setup.style.display='none'; inputbar.style.display='block';
@@ -418,6 +436,7 @@ app.get('/', (req, res) => {
       reader.readAsDataURL(file);
     }
 
+    // URL prefill
     const url = new URL(window.location);
     const r = url.searchParams.get('room');
     const n = url.searchParams.get('nick');
