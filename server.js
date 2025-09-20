@@ -1,10 +1,10 @@
 /**
- * 1:1 Chat — Tail Capsule Bubble Theme
+ * 1:1 Chat — Tail Capsule Bubble Theme (Preview-Parity)
  * - 로그인 없이 방/닉네임만
  * - 1:1 전용(최대 2명), 초대링크 ?room=, 선택 키(비번)
- * - 읽음표시(1), 타이핑 표시, 이모지 패널(입력창에만 삽입), 이미지 라이트박스, 파일 전송/붙여넣기
- * - 말풍선: 새 디자인(테일 캡슐), 세로 얇게, 흰 배경엔 진한 글자
- * - 서버 재시작 시 메모리 리셋
+ * - 읽음표시(1), 타이핑 표시, 이모지 패널(입력창에만 삽입)
+ * - 파일 전송/붙여넣기, 이미지 라이트박스, Enter 전송
+ * - 말풍선: 테일 캡슐 디자인 + 프리뷰와 동일하게 보이도록 강제 오버라이드
  */
 const express = require('express');
 const http = require('http');
@@ -20,7 +20,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 8_000_000
 });
 
-const APP_VERSION = 'v-2025-09-21-tail-capsule';
+const APP_VERSION = 'v-2025-09-21-tail-capsule-parity';
 const rooms = new Map();
 
 function getRoom(roomId) {
@@ -90,7 +90,7 @@ app.get('/', (req, res) => {
     .divider .line{height:1px;background:rgba(168,85,247,.35);flex:1}
     .divider .txt{font-size:12px;color:#a78bfa;font-family:ui-serif, Georgia, serif}
 
-    /* =============== Tail Capsule Bubble Design =============== */
+    /* =============== Tail Capsule Bubble Design (base) =============== */
     .msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
     .msg.me{justify-content:flex-end}
     .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(180deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 6px 20px rgba(245,158,11,.28)}
@@ -113,13 +113,13 @@ app.get('/', (req, res) => {
       padding:var(--pad-y) var(--pad-x);
       border-radius:16px;
       line-height:1.24;
-      background-clip:border-box !important;
-      -webkit-text-stroke:0 !important; text-shadow:none !important;
-      mix-blend-mode:normal !important;
+      background-clip:border-box;
+      -webkit-text-stroke:0; text-shadow:none;
+      mix-blend-mode:normal;
       box-shadow:0 12px 28px rgba(2,6,23,.22);
     }
     .bubble .text{
-      -webkit-font-smoothing:antialiased !important;
+      -webkit-font-smoothing:antialiased;
       -webkit-text-fill-color:currentColor;
       text-rendering:optimizeLegibility;
       word-break:break-word;
@@ -209,6 +209,66 @@ app.get('/', (req, res) => {
     .viewer .box{max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000}
     .viewer img{max-width:92vw;max-height:92vh;display:block}
     .viewer .close{position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer}
+
+    /* ===== Preview-Parity Overrides: 프리뷰와 1:1 동일하게 강제 ===== */
+    .bubble{
+      --pad-y:4px; --pad-x:12px;
+      padding:var(--pad-y) var(--pad-x) !important;
+      border-radius:16px !important;
+      line-height:1.24 !important;
+      background-clip:border-box !important;
+      -webkit-text-stroke:0 !important;
+      text-shadow:none !important;
+      mix-blend-mode:normal !important;
+      box-shadow:0 12px 28px rgba(2,6,23,.22) !important;
+    }
+    .bubble .text{
+      color:inherit !important;
+      -webkit-text-fill-color:currentColor !important;
+      -webkit-font-smoothing:antialiased !important;
+      text-rendering:optimizeLegibility !important;
+    }
+    .them .bubble{
+      background:#ffffff !important;
+      color:#0b1224 !important;
+      border:none !important;
+      outline:none !important;
+      box-shadow:0 12px 28px rgba(2,6,23,.22) !important;
+    }
+    .them .bubble::before{
+      content:"" !important;
+      position:absolute !important;
+      left:-8px !important; bottom:8px !important;
+      width:12px !important; height:12px !important;
+      background:#ffffff !important;
+      clip-path:polygon(0 50%,100% 0,100% 100%) !important;
+      filter:drop-shadow(0 6px 10px rgba(2,6,23,.15)) !important;
+    }
+    .me .bubble{
+      background:linear-gradient(180deg,#22d3ee,#8b5cf6) !important;
+      color:#eef2ff !important;
+      border:none !important;
+      outline:none !important;
+      box-shadow:0 16px 34px rgba(34,211,238,.28) !important;
+      -webkit-backface-visibility:hidden !important;
+      transform:translateZ(0) !important;
+    }
+    .me .bubble::after{
+      content:"" !important;
+      position:absolute !important;
+      right:-8px !important; bottom:8px !important;
+      width:12px !important; height:12px !important;
+      background:inherit !important;
+      clip-path:polygon(100% 50%,0 0,0 100%) !important;
+      filter:drop-shadow(0 8px 14px rgba(34,211,238,.22)) !important;
+    }
+    .msg{ gap:10px !important; margin:10px 0 !important; align-items:flex-end !important; }
+    .stack{ max-width:40% !important; }
+    @media (max-width:480px){ .stack{ max-width:64% !important; } }
+    .time{ font-size:10px !important; opacity:.9 !important; }
+    .msg.me .time{ margin-right:6px !important; }
+    .msg.them .time{ margin-left:6px !important; }
+    .read{ font-size:10px !important; margin-left:6px !important; color:rgba(230,240,255,.7) !important; }
   </style>
 </head>
 <body>
@@ -219,7 +279,7 @@ app.get('/', (req, res) => {
           <div class="fox">🦊</div>
           <div>
             <div class="title">Tail Capsule Chat</div>
-            <div class="subtitle">새 말풍선 테마 · ${APP_VERSION}</div>
+            <div class="subtitle">프리뷰 동일 테마 · ${APP_VERSION}</div>
           </div>
         </div>
         <div class="status" id="online">offline</div>
