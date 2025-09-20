@@ -1,10 +1,8 @@
 /**
  * Cloud Cat 1:1 Chat — Node.js + Socket.IO
- * - 테마/첨부/읽음표시/타이핑/라이트박스 유지
- * - 말풍선 너비 76% → 38% (모바일 보호용 하한 포함)
- * - 흰색 테두리 제거, 그림자만 적용
- * - 이모티콘: 클릭 → 입력창 삽입, Enter/버튼으로 전송
- * - Enter 즉시 전송(IME 조합 중일 때는 무시)
+ * - 말풍선 세로 패딩 절반, 라인 높이 축소
+ * - 파란 말풍선 텍스트의 흰색 테두리(할로) 제거 강화
+ * - 나머지 기능 동일
  */
 const express = require('express');
 const http = require('http');
@@ -20,7 +18,6 @@ const io = new Server(server, {
   maxHttpBufferSize: 8_000_000
 });
 
-// ---- In-memory rooms ----
 const rooms = new Map();
 function getRoom(roomId) {
   if (!rooms.has(roomId)) rooms.set(roomId, { key: null, users: new Set(), lastMsgs: [] });
@@ -38,7 +35,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = 'v-2025-09-21-bubble-half-no-border';
+const APP_VERSION = 'v-2025-09-21-bubble-vert-half-halo-fix';
 
 app.get('/healthz', (_, res) => res.status(200).type('text/plain').send('ok'));
 
@@ -70,6 +67,7 @@ app.get('/', (req, res) => {
       box-shadow:0 12px 40px rgba(2,6,23,.08);
       overflow:hidden;
       display:flex; flex-direction:column;
+      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
     }
 
     .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:rgba(255,255,255,.9);border-bottom:1px solid rgba(14,165,233,.18)}
@@ -91,39 +89,48 @@ app.get('/', (req, res) => {
     .avatar{width:32px;height:32px;border-radius:50%;background:var(--sky-200);display:flex;align-items:center;justify-content:center;font-size:18px}
     .msg.me .avatar{display:none}
 
-    /* 말풍선 너비 절반 */
+    /* 가로폭은 그대로, 세로 길이(패딩) 절반 */
     .stack{display:flex;flex-direction:column;max-width:38%}
-    @media (max-width:480px){ .stack{max-width:60%} } /* 모바일에서 너무 답답해지지 않게 방지 */
+    @media (max-width:480px){ .stack{max-width:60%} }
 
-    .name{font-size:11px;color:#64748b;margin:0 0 4px 4px}
+    .name{font-size:11px;color:#64748b;margin:0 0 2px 4px}
     .msg.me .name{display:none}
 
     .bubble{
-      padding:8px 10px;
+      padding:4px 10px;              /* ← 8px → 4px */
       border-radius:18px;
-      line-height:1.45;
+      line-height:1.25;              /* ← 1.45 → 1.25 */
       word-break:break-word;
       background-clip:padding-box;
       position:relative;
-      -webkit-text-stroke:0 !important; text-shadow:none !important;
-      -webkit-font-smoothing:antialiased !important; -moz-osx-font-smoothing:grayscale !important;
       mix-blend-mode:normal !important;
     }
-    /* 상대 말풍선: 흰색 테두리 제거, 연한 그림자만 */
     .them .bubble{
       background:#ffffff;
-      border:0;
-      outline:none;
+      border:0; outline:none;
       box-shadow:0 4px 14px rgba(2,6,23,.10);
       color:#0f172a;
     }
-    /* 내 말풍선: 스카이블루 그라데이션, 테두리 없음 */
     .me .bubble{
       background:linear-gradient(180deg,#22b8ff,#0ea5e9);
-      color:#f8fafc;
+      color:#eaf6ff; /* 약간 밝은 하늘 톤 */
       border:0; outline:none;
       box-shadow:0 10px 26px rgba(2,132,199,.28);
     }
+
+    /* 텍스트 할로 제거 강제 구역 */
+    .bubble .text{
+      -webkit-text-stroke:0 !important;
+      text-shadow:none !important;
+      -webkit-font-smoothing:antialiased !important;
+      text-rendering:optimizeLegibility;
+    }
+    .me .bubble .text{
+      color:#eaf6ff;
+      -webkit-text-fill-color:#eaf6ff; /* WebKit 계열에서 채움색 고정 */
+      filter:none !important;
+    }
+
     .bubble img{display:block;max-width:320px;height:auto;border-radius:12px;cursor:pointer}
 
     .time{font-size:10px;color:#94a3b8;align-self:flex-end;min-width:34px;text-align:center;opacity:.9}
@@ -131,7 +138,7 @@ app.get('/', (req, res) => {
     .msg.them .time{margin-left:6px}
     .read{font-size:10px;color:#94a3b8;align-self:flex-end;margin-left:6px;opacity:.95}
 
-    .att{margin-top:6px;font-size:12px}
+    .att{margin-top:4px;font-size:12px}
     .att a{color:#0ea5e9;text-decoration:none;word-break:break-all}
     .att .size{color:#64748b;margin-left:6px}
 
@@ -159,7 +166,6 @@ app.get('/', (req, res) => {
     .emoji button{font-size:20px;background:transparent;border:1px solid rgba(2,6,23,.06);border-radius:8px;cursor:pointer;padding:6px}
     .emoji button:hover{background:#fff}
 
-    /* 타이핑 말풍선 */
     .typing-flag{
       position:sticky; bottom:8px; left:0;
       display:none; align-items:center; gap:8px;
@@ -174,7 +180,6 @@ app.get('/', (req, res) => {
     .typing-flag .dots i:nth-child(3){animation-delay:.3s}
     @keyframes dotBlink{0%{opacity:.2}20%{opacity:1}100%{opacity:.2}}
 
-    /* 라이트박스 */
     .viewer{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,.7);z-index:50}
     .viewer.active{display:flex}
     .viewer .box{max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000}
@@ -200,7 +205,6 @@ app.get('/', (req, res) => {
         <div class="divider"><div class="line"></div><div class="txt">오늘</div><div class="line"></div></div>
       </div>
 
-      <!-- 라이트박스 -->
       <div id="viewer" class="viewer" role="dialog" aria-modal="true">
         <div class="close" id="viewerClose" title="닫기">✕</div>
         <div class="box"><img id="viewerImg" alt=""></div>
@@ -297,7 +301,6 @@ app.get('/', (req, res) => {
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function genId(){ return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
-    // 읽음 조건
     let hasFocus = document.hasFocus();
     let visible = document.visibilityState === 'visible';
     function isAttended(){ return hasFocus && visible; }
@@ -332,7 +335,6 @@ app.get('/', (req, res) => {
       });
     }
 
-    // 타이핑 말풍선
     const typingFlag = document.createElement('div');
     typingFlag.className = 'typing-flag';
     typingFlag.innerHTML = '<span class="who"></span> 입력 중 <span class="dots"><i></i><i></i><i></i></span>';
@@ -347,7 +349,6 @@ app.get('/', (req, res) => {
     }
     function hideTyping(){ typingFlag.style.display = 'none'; }
 
-    // 메시지 렌더
     function makeStack(){ const s = document.createElement('div'); s.className = 'stack'; return s; }
     function addMsg(fromMe, name, text, ts, id){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
@@ -426,7 +427,7 @@ app.get('/', (req, res) => {
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
-    // 이모지: 입력창에 삽입만
+    // 이모지 삽입
     const animals = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🦋','🐛','🐞','🦖','🦕','🐢','🐍','🦎','🐙','🦑','🦀','🦞','🦐','🐠','🐟','🐡','🐬','🐳','🐋','🐊','🦧','🦍','🦝','🦨','🦦','🦥','🦘','🦡','🦢','🦩','🦚','🦜'];
     const feelings = ['❤️','💖','💕','✨','🔥','🎉','🥳','👍','👏','🤝','🤗','💪','🙂','😊','😂','🤣','🥹','🥺','😡','😎','😱','😘','🤩','😴','😭'];
     let currentTab = 'animals';
@@ -443,30 +444,21 @@ app.get('/', (req, res) => {
       const pos = start + s.length;
       input.setSelectionRange(pos, pos);
     }
-
     function chooseEmoji(sym){
       if (comboMode){
-        if (currentTab === 'animals'){
-          pickedAnimal = sym; currentTab = 'feelings'; setTabUI(); renderEmoji();
-        } else if (pickedAnimal){
-          insertAtCursor(textInput, pickedAnimal + sym);
-          pickedAnimal = null; currentTab = 'animals'; setTabUI(); renderEmoji();
-        } else {
-          insertAtCursor(textInput, sym);
-        }
-      } else {
-        insertAtCursor(textInput, sym);
-      }
+        if (currentTab === 'animals'){ pickedAnimal = sym; currentTab = 'feelings'; setTabUI(); renderEmoji(); }
+        else if (pickedAnimal){ insertAtCursor(textInput, pickedAnimal + sym); pickedAnimal = null; currentTab = 'animals'; setTabUI(); renderEmoji(); }
+        else { insertAtCursor(textInput, sym); }
+      } else { insertAtCursor(textInput, sym); }
     }
-
     function renderEmoji(){
       emojiGrid.innerHTML = '';
       const list = currentTab === 'animals' ? animals : feelings;
-      for (var i=0;i<list.length;i++){
-        var sym = list[i];
-        var btn = document.createElement('button');
+      for (let i=0;i<list.length;i++){
+        const sym = list[i];
+        const btn = document.createElement('button');
         btn.type = 'button'; btn.textContent = sym;
-        btn.onclick = (function(s){ return function(){ chooseEmoji(s); }; })(sym);
+        btn.onclick = ()=> chooseEmoji(sym);
         emojiGrid.appendChild(btn);
       }
     }
@@ -476,9 +468,9 @@ app.get('/', (req, res) => {
     comboChk.onchange = ()=>{ comboMode = comboChk.checked; pickedAnimal = null; };
     setTabUI(); renderEmoji();
 
-    // 소켓/입장/전송/타이핑
+    // 소켓/입장/타이핑/엔터
     let socket; let myNick; let myRoom; let joined=false; let typingTimerSend; let typingActive=false; let lastTypingSent=0; let joinGuard;
-    let composing = false; // IME 한글 조합 중 여부
+    let composing = false;
 
     function enableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=false; }
     function disableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=true; }
@@ -523,10 +515,8 @@ app.get('/', (req, res) => {
       socket.on('typing', ({ nick, state }) => { if (state){ showTyping(nick || '상대'); } else { hideTyping(); } });
     };
 
-    // 전송 버튼
     $('#send').onclick = sendMsg;
 
-    // 타이핑 + 엔터 전송
     textInput.addEventListener('compositionstart', ()=> { composing = true; });
     textInput.addEventListener('compositionend', ()=> { composing = false; });
     textInput.addEventListener('keydown', (e)=>{
@@ -595,7 +585,6 @@ app.get('/', (req, res) => {
 
     chatBox.addEventListener('scroll', ()=> { if (isAttended()) rescanUnread(); });
 
-    // URL prefill
     const url = new URL(window.location);
     const r = url.searchParams.get('room');
     const n = url.searchParams.get('nick');
@@ -669,7 +658,6 @@ io.on('connection', (socket) => {
     socket.to(room).emit('file', { id, nick, name, type, size, data, ts: now() });
   });
 
-  // 읽음 중계
   socket.on('read', ({ room, id }) => {
     room = sanitize(room, 40);
     id = sanitize(id, 64);
@@ -677,7 +665,6 @@ io.on('connection', (socket) => {
     socket.to(room).emit('read', { id });
   });
 
-  // 타이핑 중계
   socket.on('typing', ({ room, state }) => {
     room = sanitize(room, 40);
     const nick = sanitize(socket.data.nick, 24) || '게스트';
