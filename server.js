@@ -1,10 +1,10 @@
 /**
- * 1:1 Chat — Tail Capsule Bubble Theme (Preview-Parity)
+ * 1:1 Chat — No-Bubble Mode
  * - 로그인 없이 방/닉네임만
  * - 1:1 전용(최대 2명), 초대링크 ?room=, 선택 키(비번)
  * - 읽음표시(1), 타이핑 표시, 이모지 패널(입력창에만 삽입)
  * - 파일 전송/붙여넣기, 이미지 라이트박스, Enter 전송
- * - 말풍선: 테일 캡슐 디자인 + 프리뷰와 동일하게 보이도록 강제 오버라이드
+ * - 말풍선 제거(텍스트-only 라인), 이미지 카드는 유지
  */
 const express = require('express');
 const http = require('http');
@@ -20,7 +20,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 8_000_000
 });
 
-const APP_VERSION = 'v-2025-09-21-tail-capsule-parity';
+const APP_VERSION = 'v-2025-09-21-no-bubble';
 const rooms = new Map();
 
 function getRoom(roomId) {
@@ -49,13 +49,13 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tail Capsule Chat</title>
+  <title>No-Bubble Chat</title>
   <style>
     :root{
       --bg1:#0b1224; --bg2:#0f1e3a;
       --ink:#e5e7eb; --muted:#93a4c3;
       --me-grad-start:#22d3ee; --me-grad-end:#8b5cf6;
-      --them-text:#0b1224; --me-text:#eef2ff;
+      --them-text:#f1f5f9; --me-text:#dbeafe;
       --header-h:58px;
     }
     *{box-sizing:border-box}
@@ -90,7 +90,7 @@ app.get('/', (req, res) => {
     .divider .line{height:1px;background:rgba(168,85,247,.35);flex:1}
     .divider .txt{font-size:12px;color:#a78bfa;font-family:ui-serif, Georgia, serif}
 
-    /* =============== Tail Capsule Bubble Design (base) =============== */
+    /* ===== 기본 메시지 레이아웃 ===== */
     .msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
     .msg.me{justify-content:flex-end}
     .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(180deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 6px 20px rgba(245,158,11,.28)}
@@ -107,53 +107,17 @@ app.get('/', (req, res) => {
     .msg.them .time{margin-left:6px}
     .read{font-size:10px;color:rgba(230,240,255,.7);align-self:flex-end;margin-left:6px}
 
-    .bubble{
-      --pad-y:4px; --pad-x:12px;
-      position:relative;
-      padding:var(--pad-y) var(--pad-x);
-      border-radius:16px;
-      line-height:1.24;
-      background-clip:border-box;
-      -webkit-text-stroke:0; text-shadow:none;
-      mix-blend-mode:normal;
-      box-shadow:0 12px 28px rgba(2,6,23,.22);
-    }
+    .bubble{position:relative}
     .bubble .text{
       -webkit-font-smoothing:antialiased;
       -webkit-text-fill-color:currentColor;
       text-rendering:optimizeLegibility;
       word-break:break-word;
+      line-height:1.24;
     }
-
-    .them .bubble{
-      background:#ffffff;
-      color:var(--them-text);
-      border:none; outline:none;
-    }
-    .them .bubble::before{
-      content:""; position:absolute; left:-8px; bottom:8px; width:12px; height:12px;
-      background:#ffffff;
-      clip-path:polygon(0 50%,100% 0,100% 100%);
-      filter:drop-shadow(0 6px 10px rgba(2,6,23,.15));
-    }
-
-    .me .bubble{
-      background:linear-gradient(180deg,var(--me-grad-start),var(--me-grad-end));
-      color:var(--me-text);
-      border:none; outline:none;
-      box-shadow:0 16px 34px rgba(34,211,238,.28);
-      -webkit-backface-visibility:hidden; transform:translateZ(0);
-    }
-    .me .bubble::after{
-      content:""; position:absolute; right:-8px; bottom:8px; width:12px; height:12px;
-      background:inherit;
-      clip-path:polygon(100% 50%,0 0,0 100%);
-      filter:drop-shadow(0 8px 14px rgba(34,211,238,.22));
-    }
-
     .bubble img{display:block;max-width:320px;height:auto;border-radius:12px;cursor:zoom-in}
 
-    /* 입력줄 */
+    /* ===== 입력줄 ===== */
     .inputbar{
       position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:760px;
       background:rgba(9,13,26,.75);backdrop-filter:blur(10px) saturate(110%);
@@ -166,7 +130,7 @@ app.get('/', (req, res) => {
     .btn-attach{background:#24304e;color:#dbeafe}
     .btn-send{background:linear-gradient(180deg,#22d3ee,#60a5fa);color:#071226}
 
-    /* 설정 패널 */
+    /* ===== 설정 패널 ===== */
     .setup{padding:14px 14px 120px 14px;background:linear-gradient(180deg, rgba(167,139,250,.08), rgba(34,211,238,.06))}
     .panel{background:rgba(8,12,26,.7);border:1px solid rgba(168,85,247,.18);border-radius:16px;padding:14px}
     .label{display:block;margin:10px 0 6px;color:#cbd5e1}
@@ -174,7 +138,7 @@ app.get('/', (req, res) => {
     .row{display:flex;gap:8px;margin-top:12px}
     .link{font-size:12px;color:#a78bfa}
 
-    /* 이모지 패널 */
+    /* ===== 이모지 패널 ===== */
     .emoji-panel{
       position:fixed;left:0;right:0;bottom:60px;margin:0 auto;max-width:760px;
       background:rgba(8,12,26,.85);border:1px solid rgba(168,85,247,.2);border-bottom:none;border-radius:14px 14px 0 0;
@@ -188,7 +152,7 @@ app.get('/', (req, res) => {
     .emoji button{font-size:20px;background:transparent;border:1px solid rgba(167,139,250,.18);border-radius:8px;cursor:pointer;padding:6px;color:#fff}
     .emoji button:hover{background:rgba(167,139,250,.18)}
 
-    /* 타이핑 플래그 */
+    /* ===== 타이핑 플래그 ===== */
     .typing-flag{
       position:sticky; bottom:8px; left:0;
       display:none; align-items:center; gap:8px;
@@ -203,72 +167,45 @@ app.get('/', (req, res) => {
     .typing-flag .dots i:nth-child(3){animation-delay:.3s}
     @keyframes dotBlink{0%{opacity:.2}20%{opacity:1}100%{opacity:.2}}
 
-    /* 라이트박스 */
+    /* ===== 라이트박스 ===== */
     .viewer{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(1,3,10,.86);z-index:50}
     .viewer.active{display:flex}
     .viewer .box{max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000}
     .viewer img{max-width:92vw;max-height:92vh;display:block}
     .viewer .close{position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer}
 
-    /* ===== Preview-Parity Overrides: 프리뷰와 1:1 동일하게 강제 ===== */
+    /* ================= No-Bubble Mode: 말풍선 제거 ================= */
+    .stack{ max-width:60% !important; }
+    @media (max-width:480px){ .stack{ max-width:80% !important; } }
+
     .bubble{
-      --pad-y:4px; --pad-x:12px;
-      padding:var(--pad-y) var(--pad-x) !important;
-      border-radius:16px !important;
-      line-height:1.24 !important;
-      background-clip:border-box !important;
-      -webkit-text-stroke:0 !important;
-      text-shadow:none !important;
-      mix-blend-mode:normal !important;
-      box-shadow:0 12px 28px rgba(2,6,23,.22) !important;
-    }
-    .bubble .text{
-      color:inherit !important;
-      -webkit-text-fill-color:currentColor !important;
-      -webkit-font-smoothing:antialiased !important;
-      text-rendering:optimizeLegibility !important;
-    }
-    .them .bubble{
-      background:#ffffff !important;
-      color:#0b1224 !important;
+      background:transparent !important;
+      padding:0 !important;
       border:none !important;
-      outline:none !important;
-      box-shadow:0 12px 28px rgba(2,6,23,.22) !important;
+      border-radius:0 !important;
+      box-shadow:none !important;
+      background-clip:initial !important;
     }
-    .them .bubble::before{
-      content:"" !important;
-      position:absolute !important;
-      left:-8px !important; bottom:8px !important;
-      width:12px !important; height:12px !important;
-      background:#ffffff !important;
-      clip-path:polygon(0 50%,100% 0,100% 100%) !important;
-      filter:drop-shadow(0 6px 10px rgba(2,6,23,.15)) !important;
+    .them .bubble::before,
+    .me .bubble::after{ display:none !important; }
+
+    .me .bubble .text{
+      color:var(--me-text) !important;
+      -webkit-text-fill-color:var(--me-text) !important;
     }
-    .me .bubble{
-      background:linear-gradient(180deg,#22d3ee,#8b5cf6) !important;
-      color:#eef2ff !important;
-      border:none !important;
-      outline:none !important;
-      box-shadow:0 16px 34px rgba(34,211,238,.28) !important;
-      -webkit-backface-visibility:hidden !important;
-      transform:translateZ(0) !important;
+    .them .bubble .text{
+      color:var(--them-text) !important;
+      -webkit-text-fill-color:var(--them-text) !important;
     }
-    .me .bubble::after{
-      content:"" !important;
-      position:absolute !important;
-      right:-8px !important; bottom:8px !important;
-      width:12px !important; height:12px !important;
-      background:inherit !important;
-      clip-path:polygon(100% 50%,0 0,0 100%) !important;
-      filter:drop-shadow(0 8px 14px rgba(34,211,238,.22)) !important;
-    }
-    .msg{ gap:10px !important; margin:10px 0 !important; align-items:flex-end !important; }
-    .stack{ max-width:40% !important; }
-    @media (max-width:480px){ .stack{ max-width:64% !important; } }
-    .time{ font-size:10px !important; opacity:.9 !important; }
+
     .msg.me .time{ margin-right:6px !important; }
     .msg.them .time{ margin-left:6px !important; }
-    .read{ font-size:10px !important; margin-left:6px !important; color:rgba(230,240,255,.7) !important; }
+
+    .bubble img{
+      display:block; max-width:320px; height:auto;
+      border-radius:12px; cursor:zoom-in;
+      box-shadow:0 12px 28px rgba(2,6,23,.28);
+    }
   </style>
 </head>
 <body>
@@ -278,8 +215,8 @@ app.get('/', (req, res) => {
         <div class="brand">
           <div class="fox">🦊</div>
           <div>
-            <div class="title">Tail Capsule Chat</div>
-            <div class="subtitle">프리뷰 동일 테마 · ${APP_VERSION}</div>
+            <div class="title">No-Bubble Chat</div>
+            <div class="subtitle">텍스트-only 라인 · ${APP_VERSION}</div>
           </div>
         </div>
         <div class="status" id="online">offline</div>
