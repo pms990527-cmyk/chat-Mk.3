@@ -1,8 +1,9 @@
 /**
- * Cloud Cat 1:1 Chat — Node.js + Socket.IO
- * - 말풍선 세로 패딩 절반, 라인 높이 축소
- * - 파란 말풍선 텍스트의 흰색 테두리(할로) 제거 강화
- * - 나머지 기능 동일
+ * Aurora Fox 1:1 Chat — Node.js + Socket.IO
+ * - New theme: aurora night gradient, fox avatar
+ * - No white text halo, no bubble borders
+ * - Vertical bubble padding halved (compact height)
+ * - Read receipts(1), typing, emoji-in-input, image lightbox, file paste, enter-to-send
  */
 const express = require('express');
 const http = require('http');
@@ -18,6 +19,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 8_000_000
 });
 
+// In-memory rooms
 const rooms = new Map();
 function getRoom(roomId) {
   if (!rooms.has(roomId)) rooms.set(roomId, { key: null, users: new Set(), lastMsgs: [] });
@@ -35,7 +37,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = 'v-2025-09-21-bubble-vert-half-halo-fix';
+const APP_VERSION = 'v-2025-09-21-aurora-fox';
 
 app.get('/healthz', (_, res) => res.status(200).type('text/plain').send('ok'));
 
@@ -47,140 +49,156 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cloud Cat Chat</title>
+  <title>Aurora Fox Chat</title>
   <style>
     :root{
-      --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc; --sky-400:#38bdf8;
-      --ink:#0f172a; --muted:#64748b; --white:#ffffff; --header-h:58px;
+      /* Aurora night palette */
+      --bg1:#0b1224; --bg2:#0f1e3a;
+      --card:#0e152b;
+      --glow:rgba(168, 85, 247, .18);
+      --ink:#e5e7eb; --muted:#93a4c3;
+      --aurora-v:#8b5cf6; --aurora-c:#22d3ee; --aurora-l:#a78bfa;
+      --me-txt:#eef2ff; --them-txt:#0b1224;
+      --white:#ffffff; --header-h:58px;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial;background:linear-gradient(180deg,var(--sky-100),var(--white));color:var(--ink)}
-    .wrap{max-width:720px;margin:0 auto;min-height:100%;padding:0 12px}
+    body{
+      margin:0;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial;
+      background:radial-gradient(1200px 600px at 20% -10%, rgba(34,211,238,.12), transparent 60%),
+                 radial-gradient(1000px 600px at 80% 0%, rgba(139,92,246,.12), transparent 55%),
+                 linear-gradient(180deg,var(--bg2),var(--bg1));
+      color:var(--ink);
+      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    }
+    .wrap{max-width:760px;margin:0 auto;min-height:100%;padding:0 12px}
 
     .card{
       height:100dvh; height:100svh;
-      background:rgba(255,255,255,.85);
-      backdrop-filter:blur(6px);
-      border:1px solid rgba(14,165,233,.12);
+      background:rgba(10,14,30,.7);
+      backdrop-filter:blur(10px) saturate(110%);
+      border:1px solid rgba(168,85,247,.18);
       border-radius:24px;
-      box-shadow:0 12px 40px rgba(2,6,23,.08);
+      box-shadow:0 18px 60px rgba(2,6,23,.55), inset 0 0 0 1px rgba(255,255,255,.02);
       overflow:hidden;
       display:flex; flex-direction:column;
-      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
     }
 
-    .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:rgba(255,255,255,.9);border-bottom:1px solid rgba(14,165,233,.18)}
+    .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid rgba(168,85,247,.18)}
     .brand{display:flex;gap:10px;align-items:center}
-    .cat{width:36px;height:36px;border-radius:999px;background:var(--sky-200);display:flex;align-items:center;justify-content:center}
-    .title{font-weight:800;color:#0284c7}
-    .subtitle{font-size:12px;color:#64748b;font-family:ui-serif, Georgia, serif}
-    .status{display:flex;gap:6px;align-items:center;color:#0284c7;font-size:12px;font-family:ui-serif, Georgia, serif}
+    .fox{width:36px;height:36px;border-radius:999px;background:linear-gradient(180deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;box-shadow:0 0 24px rgba(245,158,11,.3)}
+    .title{font-weight:800;color:#c4b5fd}
+    .subtitle{font-size:12px;color:var(--muted);font-family:ui-serif, Georgia, serif}
+    .status{display:flex;gap:6px;align-items:center;color:#22d3ee;font-size:12px;font-family:ui-serif, Georgia, serif}
 
     .chat{flex:1; min-height:0; overflow:auto;
-      background:linear-gradient(180deg,var(--sky-50),var(--white));
+      background:linear-gradient(180deg, rgba(34,211,238,.06), rgba(139,92,246,.04) 40%, transparent 80%);
       padding:14px 14px 110px 14px}
     .divider{display:flex;align-items:center;gap:8px;margin:8px 0}
-    .divider .line{height:1px;background:rgba(14,165,233,.35);flex:1}
-    .divider .txt{font-size:12px;color:#0ea5e9;font-family:ui-serif, Georgia, serif}
+    .divider .line{height:1px;background:rgba(168,85,247,.35);flex:1}
+    .divider .txt{font-size:12px;color:#a78bfa;font-family:ui-serif, Georgia, serif}
 
     .msg{display:flex;gap:8px;margin:8px 0;align-items:flex-end}
     .msg.me{justify-content:flex-end}
-    .avatar{width:32px;height:32px;border-radius:50%;background:var(--sky-200);display:flex;align-items:center;justify-content:center;font-size:18px}
+    .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(180deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 6px 20px rgba(245,158,11,.28)}
     .msg.me .avatar{display:none}
 
-    /* 가로폭은 그대로, 세로 길이(패딩) 절반 */
+    /* width like before; compact vertical height */
     .stack{display:flex;flex-direction:column;max-width:38%}
     @media (max-width:480px){ .stack{max-width:60%} }
 
-    .name{font-size:11px;color:#64748b;margin:0 0 2px 4px}
+    .name{font-size:11px;color:#b5c5ea;margin:0 0 2px 4px}
     .msg.me .name{display:none}
 
     .bubble{
-      padding:4px 10px;              /* ← 8px → 4px */
-      border-radius:18px;
-      line-height:1.25;              /* ← 1.45 → 1.25 */
+      padding:4px 10px;              /* vertical compact */
+      border-radius:16px;
+      line-height:1.25;
       word-break:break-word;
       background-clip:padding-box;
       position:relative;
       mix-blend-mode:normal !important;
-    }
-    .them .bubble{
-      background:#ffffff;
-      border:0; outline:none;
-      box-shadow:0 4px 14px rgba(2,6,23,.10);
-      color:#0f172a;
-    }
-    .me .bubble{
-      background:linear-gradient(180deg,#22b8ff,#0ea5e9);
-      color:#eaf6ff; /* 약간 밝은 하늘 톤 */
-      border:0; outline:none;
-      box-shadow:0 10px 26px rgba(2,132,199,.28);
-    }
-
-    /* 텍스트 할로 제거 강제 구역 */
-    .bubble .text{
       -webkit-text-stroke:0 !important;
       text-shadow:none !important;
+    }
+    /* them: frosted white pill, no border */
+    .them .bubble{
+      background:rgba(255,255,255,.92);
+      border:0; outline:none;
+      box-shadow:0 10px 26px rgba(2,6,23,.28);
+      color:var(--them-txt);
+    }
+    /* me: aurora gradient pill, no border, soft glow */
+    .me .bubble{
+      background:linear-gradient(180deg, var(--aurora-c), var(--aurora-v));
+      color:var(--me-txt);
+      border:0; outline:none;
+      box-shadow:0 16px 36px rgba(34,211,238,.28), 0 0 0 1px rgba(255,255,255,.02);
+    }
+    .bubble .text{
       -webkit-font-smoothing:antialiased !important;
       text-rendering:optimizeLegibility;
+      -webkit-text-fill-color:currentColor;
     }
-    .me .bubble .text{
-      color:#eaf6ff;
-      -webkit-text-fill-color:#eaf6ff; /* WebKit 계열에서 채움색 고정 */
-      filter:none !important;
-    }
-
     .bubble img{display:block;max-width:320px;height:auto;border-radius:12px;cursor:pointer}
 
-    .time{font-size:10px;color:#94a3b8;align-self:flex-end;min-width:34px;text-align:center;opacity:.9}
+    .time{font-size:10px;color:#96a7c8;align-self:flex-end;min-width:34px;text-align:center;opacity:.95}
     .msg.me .time{margin-right:6px}
     .msg.them .time{margin-left:6px}
-    .read{font-size:10px;color:#94a3b8;align-self:flex-end;margin-left:6px;opacity:.95}
+    .read{font-size:10px;color:#96a7c8;align-self:flex-end;margin-left:6px;opacity:.95}
 
     .att{margin-top:4px;font-size:12px}
-    .att a{color:#0ea5e9;text-decoration:none;word-break:break-all}
-    .att .size{color:#64748b;margin-left:6px}
+    .att a{color:#93c5fd;text-decoration:none;word-break:break-all}
+    .att .size{color:#9fb0d1;margin-left:6px}
 
-    .inputbar{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:720px;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);border-top:1px solid rgba(14,165,233,.18);padding:10px}
+    .inputbar{
+      position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:760px;
+      background:rgba(9,13,26,.75);backdrop-filter:blur(10px) saturate(110%);
+      border-top:1px solid rgba(168,85,247,.2);padding:10px
+    }
     .inputrow{display:flex;gap:8px;align-items:center}
-    .text{flex:1;border:1px solid var(--sky-200);border-radius:14px;padding:12px 12px;font:inherit}
+    .text{flex:1;border:1px solid rgba(168,85,247,.25);background:rgba(255,255,255,.06);color:#e5e7eb;border-radius:14px;padding:12px 12px;font:inherit}
     .btn{height:40px;padding:0 14px;border:none;border-radius:12px;font-weight:700;cursor:pointer}
-    .btn-emoji{background:var(--sky-200);color:#0c4a6e}
-    .btn-attach{background:#e2e8f0;color:#0f172a}
-    .btn-send{background:var(--sky-400);color:#fff}
+    .btn-emoji{background:linear-gradient(180deg,#e879f9,#a78bfa);color:#161e35}
+    .btn-attach{background:#24304e;color:#dbeafe}
+    .btn-send{background:linear-gradient(180deg,#22d3ee,#60a5fa);color:#071226}
 
-    .setup{padding:14px 14px 120px 14px;background:linear-gradient(180deg,var(--sky-50),var(--white))}
-    .panel{background:#fff;border:1px solid rgba(14,165,233,.18);border-radius:16px;padding:14px}
-    .label{display:block;margin:10px 0 6px}
-    .field{width:100%;padding:10px;border:1px solid var(--sky-200);border-radius:10px;font:inherit}
+    .setup{padding:14px 14px 120px 14px;background:linear-gradient(180deg, rgba(167,139,250,.08), rgba(34,211,238,.06))}
+    .panel{background:rgba(8,12,26,.7);border:1px solid rgba(168,85,247,.18);border-radius:16px;padding:14px}
+    .label{display:block;margin:10px 0 6px;color:#cbd5e1}
+    .field{width:100%;padding:10px;border:1px solid rgba(168,85,247,.25);border-radius:10px;font:inherit;background:rgba(255,255,255,.06);color:#e5e7eb}
     .row{display:flex;gap:8px;margin-top:12px}
-    .link{font-size:12px;color:#0ea5e9}
+    .link{font-size:12px;color:#a78bfa}
 
-    .emoji-panel{position:fixed;left:0;right:0;bottom:60px;margin:0 auto;max-width:720px;background:var(--sky-50);border:1px solid rgba(14,165,233,.18);border-bottom:none;border-radius:14px 14px 0 0;box-shadow:0 -6px 24px rgba(2,6,23,.06);}
-    .emoji-tabs{display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(14,165,233,.18);background:#fff;border-radius:14px 14px 0 0}
-    .emoji-tabs button{padding:6px 10px;border:1px solid rgba(2,6,23,.08);background:#f8fafc;border-radius:8px;cursor:pointer}
-    .emoji-tabs button.active{background:#fff;border-color:#0284c7;color:#0284c7}
-    .emoji-tabs .combo{margin-left:auto;font-size:12px;color:#64748b}
-    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:10px;max-height:240px;overflow:auto;background:var(--sky-50)}
-    .emoji button{font-size:20px;background:transparent;border:1px solid rgba(2,6,23,.06);border-radius:8px;cursor:pointer;padding:6px}
-    .emoji button:hover{background:#fff}
+    .emoji-panel{
+      position:fixed;left:0;right:0;bottom:60px;margin:0 auto;max-width:760px;
+      background:rgba(8,12,26,.85);border:1px solid rgba(168,85,247,.2);border-bottom:none;border-radius:14px 14px 0 0;
+      box-shadow:0 -8px 30px rgba(2,6,23,.55); color:#e5e7eb;
+    }
+    .emoji-tabs{display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(168,85,247,.18);background:rgba(11,18,36,.9);border-radius:14px 14px 0 0}
+    .emoji-tabs button{padding:6px 10px;border:1px solid rgba(167,139,250,.25);background:rgba(255,255,255,.06);color:#dbeafe;border-radius:8px;cursor:pointer}
+    .emoji-tabs button.active{background:rgba(167,139,250,.25);border-color:#a78bfa;color:#fff}
+    .emoji-tabs .combo{margin-left:auto;font-size:12px;color:#cbd5e1}
+    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:10px;max-height:240px;overflow:auto;background:rgba(11,18,36,.6)}
+    .emoji button{font-size:20px;background:transparent;border:1px solid rgba(167,139,250,.18);border-radius:8px;cursor:pointer;padding:6px;color:#fff}
+    .emoji button:hover{background:rgba(167,139,250,.18)}
 
     .typing-flag{
       position:sticky; bottom:8px; left:0;
       display:none; align-items:center; gap:8px;
-      background:rgba(255,255,255,.97);
-      border:1px solid rgba(14,165,233,.22);
-      padding:6px 10px; border-radius:12px; color:#0f172a;
-      font-size:12px; box-shadow:0 8px 24px rgba(2,6,23,.08); max-width:70%;
+      background:rgba(8,12,26,.9);
+      border:1px solid rgba(168,85,247,.25);
+      padding:6px 10px; border-radius:12px; color:#e5e7eb;
+      font-size:12px; box-shadow:0 8px 24px rgba(2,6,23,.5); max-width:70%;
     }
-    .typing-flag .who{font-weight:600; color:#0284c7}
-    .typing-flag .dots i{display:inline-block;width:4px;height:4px;background:#94a3b8;border-radius:50%;margin-left:3px;animation:dotBlink 1.2s infinite}
+    .typing-flag .who{font-weight:600; color:#a78bfa}
+    .typing-flag .dots i{display:inline-block;width:4px;height:4px;background:#93a4c3;border-radius:50%;margin-left:3px;animation:dotBlink 1.2s infinite}
     .typing-flag .dots i:nth-child(2){animation-delay:.15s}
     .typing-flag .dots i:nth-child(3){animation-delay:.3s}
     @keyframes dotBlink{0%{opacity:.2}20%{opacity:1}100%{opacity:.2}}
 
-    .viewer{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,.7);z-index:50}
+    .viewer{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(1,3,10,.86);z-index:50}
     .viewer.active{display:flex}
     .viewer .box{max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000}
     .viewer img{max-width:92vw;max-height:92vh;display:block}
@@ -192,24 +210,26 @@ app.get('/', (req, res) => {
     <div class="card">
       <div class="appbar">
         <div class="brand">
-          <div class="cat">🐱</div>
+          <div class="fox">🦊</div>
           <div>
-            <div class="title">Cloud Cat Chat</div>
-            <div class="subtitle">구름 위를 걷는 고양이 테마 · v ${APP_VERSION}</div>
+            <div class="title">Aurora Fox Chat</div>
+            <div class="subtitle">오로라를 휘젓는 여우 테마 · v ${APP_VERSION}</div>
           </div>
         </div>
-        <div class="status"><span>☁️</span><span id="online">offline</span></div>
+        <div class="status"><span>✨</span><span id="online">offline</span></div>
       </div>
 
       <div class="chat" id="chat">
         <div class="divider"><div class="line"></div><div class="txt">오늘</div><div class="line"></div></div>
       </div>
 
+      <!-- Lightbox -->
       <div id="viewer" class="viewer" role="dialog" aria-modal="true">
         <div class="close" id="viewerClose" title="닫기">✕</div>
         <div class="box"><img id="viewerImg" alt=""></div>
       </div>
 
+      <!-- Emoji -->
       <div id="emojiPanel" class="emoji-panel" style="display:none">
         <div class="emoji-tabs">
           <button id="tabAnimals" class="active" type="button">동물</button>
@@ -219,21 +239,23 @@ app.get('/', (req, res) => {
         <div id="emojiGrid" class="emoji"></div>
       </div>
 
+      <!-- Input -->
       <div class="inputbar" id="inputbar" style="display:none">
         <div class="inputrow">
-          <input id="text" class="text" type="text" placeholder="구름 속 고양이에게 말을 걸어보세요..." />
+          <input id="text" class="text" type="text" placeholder="오로라 속 여우에게 귓속말..." />
           <input id="file" type="file" style="display:none" accept="image/*,.pdf,.txt,.zip,.doc,.docx,.ppt,.pptx,.xls,.xlsx"/>
           <button id="attach" class="btn btn-attach" type="button">📎</button>
           <button id="emojiBtn" class="btn btn-emoji" type="button">😊</button>
-          <button id="send" class="btn btn-send" type="button">야옹!</button>
+          <button id="send" class="btn btn-send" type="button">보내기</button>
         </div>
         <div class="subtitle" style="margin-top:4px">Enter 전송 · 2MB 이하 첨부 지원</div>
       </div>
 
+      <!-- Setup -->
       <div id="setup" class="setup">
         <div class="panel">
           <label class="label">대화방 코드</label>
-          <input id="room" class="field" type="text" placeholder="예: myroom123" value="${room}" />
+          <input id="room" class="field" type="text" placeholder="예: aurora-fox" value="${room}" />
           <label class="label">닉네임</label>
           <input id="nick" class="field" type="text" placeholder="예: 민성" value="${nick}" />
           <label class="label">방 키 (선택)</label>
@@ -256,7 +278,7 @@ app.get('/', (req, res) => {
     const setup = $('#setup');
     const inputbar = $('#inputbar');
 
-    // 라이트박스
+    // Lightbox
     const viewer = $('#viewer');
     const viewerImg = $('#viewerImg');
     const viewerClose = $('#viewerClose');
@@ -266,14 +288,14 @@ app.get('/', (req, res) => {
     viewerClose.addEventListener('click', closeViewer);
     window.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeViewer(); });
 
-    // 이모지 패널
+    // Emoji
     const emojiPanel = $('#emojiPanel');
     const emojiGrid = $('#emojiGrid');
     const tabAnimals = $('#tabAnimals');
     const tabFeels = $('#tabFeels');
     const comboChk = $('#comboMode');
 
-    // 입력/상태
+    // Inputs/state
     const roomInput = $('#room');
     const nickInput = $('#nick');
     const keyInput = $('#key');
@@ -301,6 +323,7 @@ app.get('/', (req, res) => {
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function genId(){ return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
+    // Read conditions
     let hasFocus = document.hasFocus();
     let visible = document.visibilityState === 'visible';
     function isAttended(){ return hasFocus && visible; }
@@ -335,6 +358,7 @@ app.get('/', (req, res) => {
       });
     }
 
+    // Typing flag
     const typingFlag = document.createElement('div');
     typingFlag.className = 'typing-flag';
     typingFlag.innerHTML = '<span class="who"></span> 입력 중 <span class="dots"><i></i><i></i><i></i></span>';
@@ -349,13 +373,14 @@ app.get('/', (req, res) => {
     }
     function hideTyping(){ typingFlag.style.display = 'none'; }
 
+    // Render message
     function makeStack(){ const s = document.createElement('div'); s.className = 'stack'; return s; }
     function addMsg(fromMe, name, text, ts, id){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
       if(id) row.setAttribute('data-mid', id);
 
       if(!fromMe){
-        const av = document.createElement('div'); av.className='avatar'; av.textContent = '🐾';
+        const av = document.createElement('div'); av.className='avatar'; av.textContent = '🦊';
         row.appendChild(av);
       } else {
         const t = document.createElement('span'); t.className='time'; t.textContent = fmt(ts||Date.now()); row.appendChild(t);
@@ -382,13 +407,14 @@ app.get('/', (req, res) => {
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
+    // Render file/image
     function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return (b/1024).toFixed(1)+' KB'; return (b/1024/1024).toFixed(2)+' MB'; }
     function addFile(fromMe, name, file, id){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
       if(id) row.setAttribute('data-mid', id);
 
       if(!fromMe){
-        const av = document.createElement('div'); av.className='avatar'; av.textContent = '🐾';
+        const av = document.createElement('div'); av.className='avatar'; av.textContent = '🦊';
         row.appendChild(av);
       } else {
         const t = document.createElement('span'); t.className='time'; t.textContent = fmt(file.ts||Date.now()); row.appendChild(t);
@@ -427,7 +453,7 @@ app.get('/', (req, res) => {
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
-    // 이모지 삽입
+    // Emoji dataset
     const animals = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🦋','🐛','🐞','🦖','🦕','🐢','🐍','🦎','🐙','🦑','🦀','🦞','🦐','🐠','🐟','🐡','🐬','🐳','🐋','🐊','🦧','🦍','🦝','🦨','🦦','🦥','🦘','🦡','🦢','🦩','🦚','🦜'];
     const feelings = ['❤️','💖','💕','✨','🔥','🎉','🥳','👍','👏','🤝','🤗','💪','🙂','😊','😂','🤣','🥹','🥺','😡','😎','😱','😘','🤩','😴','😭'];
     let currentTab = 'animals';
@@ -468,7 +494,7 @@ app.get('/', (req, res) => {
     comboChk.onchange = ()=>{ comboMode = comboChk.checked; pickedAnimal = null; };
     setTabUI(); renderEmoji();
 
-    // 소켓/입장/타이핑/엔터
+    // Socket / join / send / typing
     let socket; let myNick; let myRoom; let joined=false; let typingTimerSend; let typingActive=false; let lastTypingSent=0; let joinGuard;
     let composing = false;
 
@@ -515,8 +541,10 @@ app.get('/', (req, res) => {
       socket.on('typing', ({ nick, state }) => { if (state){ showTyping(nick || '상대'); } else { hideTyping(); } });
     };
 
+    // Send
     $('#send').onclick = sendMsg;
 
+    // IME-aware enter send + typing
     textInput.addEventListener('compositionstart', ()=> { composing = true; });
     textInput.addEventListener('compositionend', ()=> { composing = false; });
     textInput.addEventListener('keydown', (e)=>{
@@ -539,10 +567,12 @@ app.get('/', (req, res) => {
       typingTimerSend = setTimeout(()=>{ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } }, 1500);
     }
 
+    // Emoji toggle
     $('#emojiBtn').onclick = () => {
       emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none');
     };
 
+    // Attach
     $('#attach').onclick = () => fileInput.click();
     fileInput.onchange = () => {
       const files = Array.from(fileInput.files||[]);
@@ -550,6 +580,7 @@ app.get('/', (req, res) => {
       fileInput.value = '';
     };
 
+    // Paste file
     document.addEventListener('paste', (e)=>{
       if(!joined) return;
       const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
@@ -585,6 +616,7 @@ app.get('/', (req, res) => {
 
     chatBox.addEventListener('scroll', ()=> { if (isAttended()) rescanUnread(); });
 
+    // Prefill URL
     const url = new URL(window.location);
     const r = url.searchParams.get('room');
     const n = url.searchParams.get('nick');
@@ -658,6 +690,7 @@ io.on('connection', (socket) => {
     socket.to(room).emit('file', { id, nick, name, type, size, data, ts: now() });
   });
 
+  // read relay
   socket.on('read', ({ room, id }) => {
     room = sanitize(room, 40);
     id = sanitize(id, 64);
@@ -665,6 +698,7 @@ io.on('connection', (socket) => {
     socket.to(room).emit('read', { id });
   });
 
+  // typing relay
   socket.on('typing', ({ room, state }) => {
     room = sanitize(room, 40);
     const nick = sanitize(socket.data.nick, 24) || '게스트';
