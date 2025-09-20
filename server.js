@@ -1,10 +1,10 @@
 /**
- * 1:1 Chat — No-Bubble Mode
- * - 로그인 없이 방/닉네임만
- * - 1:1 전용(최대 2명), 초대링크 ?room=, 선택 키(비번)
- * - 읽음표시(1), 타이핑 표시, 이모지 패널(입력창에만 삽입)
- * - 파일 전송/붙여넣기, 이미지 라이트박스, Enter 전송
- * - 말풍선 제거(텍스트-only 라인), 이미지 카드는 유지
+ * 1:1 Chat — No-Bubble + Keep-Alive
+ * - 로그인 없이 방/닉네임
+ * - 1:1, 초대링크 ?room=, 선택 키(비번)
+ * - 읽음표시, 타이핑 표시, 이모지(입력창 삽입), 파일 전송, 이미지 라이트박스
+ * - 말풍선 제거(No-Bubble)
+ * - WS 유휴 끊김 방지: socket.io ping 조정 + 앱 레벨 keep-alive(ka)
  */
 const express = require('express');
 const http = require('http');
@@ -12,15 +12,21 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+
+// 일부 프록시는 헤더/커넥션 타임아웃이 짧다. 안전빵 세팅.
+server.headersTimeout = 65_000;     // 65s
+server.keepAliveTimeout = 61_000;   // 61s
+
 const io = new Server(server, {
   cors: { origin: '*' },
   serveClient: true,
-  pingTimeout: 25000,
-  pingInterval: 20000,
+  // 기본 핑을 더 자주, 타임아웃은 더 길게
+  pingInterval: 10_000,     // 10s
+  pingTimeout: 180_000,     // 3min
   maxHttpBufferSize: 8_000_000
 });
 
-const APP_VERSION = 'v-2025-09-21-no-bubble';
+const APP_VERSION = 'v-2025-09-21-no-bubble-ka';
 const rooms = new Map();
 
 function getRoom(roomId) {
@@ -54,7 +60,6 @@ app.get('/', (req, res) => {
     :root{
       --bg1:#0b1224; --bg2:#0f1e3a;
       --ink:#e5e7eb; --muted:#93a4c3;
-      --me-grad-start:#22d3ee; --me-grad-end:#8b5cf6;
       --them-text:#f1f5f9; --me-text:#dbeafe;
       --header-h:58px;
     }
@@ -82,22 +87,22 @@ app.get('/', (req, res) => {
     .brand{display:flex;gap:10px;align-items:center}
     .fox{width:36px;height:36px;border-radius:999px;background:linear-gradient(180deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;box-shadow:0 0 24px rgba(245,158,11,.3)}
     .title{font-weight:800;color:#c4b5fd}
-    .subtitle{font-size:12px;color:var(--muted);font-family:ui-serif, Georgia, serif}
+    .subtitle{font-size:12px;color:#93a4c3}
     .status{font-size:12px;color:#22d3ee}
 
     .chat{flex:1;min-height:0;overflow:auto;background:linear-gradient(180deg, rgba(34,211,238,.06), rgba(139,92,246,.04) 40%, transparent 80%);padding:14px 14px 110px 14px}
     .divider{display:flex;align-items:center;gap:8px;margin:8px 0}
     .divider .line{height:1px;background:rgba(168,85,247,.35);flex:1}
-    .divider .txt{font-size:12px;color:#a78bfa;font-family:ui-serif, Georgia, serif}
+    .divider .txt{font-size:12px;color:#a78bfa}
 
-    /* ===== 기본 메시지 레이아웃 ===== */
+    /* ===== 메시지 레이아웃 (No-Bubble) ===== */
     .msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
     .msg.me{justify-content:flex-end}
     .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(180deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 6px 20px rgba(245,158,11,.28)}
     .msg.me .avatar{display:none}
 
-    .stack{display:flex;flex-direction:column;max-width:40%}
-    @media (max-width:480px){ .stack{max-width:64%} }
+    .stack{display:flex;flex-direction:column;max-width:60%}
+    @media (max-width:480px){ .stack{max-width:80%} }
 
     .name{font-size:11px;opacity:.85;color:#b5c5ea;margin:0 0 2px 6px}
     .msg.me .name{display:none}
@@ -115,7 +120,10 @@ app.get('/', (req, res) => {
       word-break:break-word;
       line-height:1.24;
     }
-    .bubble img{display:block;max-width:320px;height:auto;border-radius:12px;cursor:zoom-in}
+    .me .bubble .text{ color:var(--me-text) }
+    .them .bubble .text{ color:var(--them-text) }
+
+    .bubble img{display:block;max-width:320px;height:auto;border-radius:12px;cursor:zoom-in;box-shadow:0 12px 28px rgba(2,6,23,.28)}
 
     /* ===== 입력줄 ===== */
     .inputbar{
@@ -166,46 +174,6 @@ app.get('/', (req, res) => {
     .typing-flag .dots i:nth-child(2){animation-delay:.15s}
     .typing-flag .dots i:nth-child(3){animation-delay:.3s}
     @keyframes dotBlink{0%{opacity:.2}20%{opacity:1}100%{opacity:.2}}
-
-    /* ===== 라이트박스 ===== */
-    .viewer{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(1,3,10,.86);z-index:50}
-    .viewer.active{display:flex}
-    .viewer .box{max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000}
-    .viewer img{max-width:92vw;max-height:92vh;display:block}
-    .viewer .close{position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer}
-
-    /* ================= No-Bubble Mode: 말풍선 제거 ================= */
-    .stack{ max-width:60% !important; }
-    @media (max-width:480px){ .stack{ max-width:80% !important; } }
-
-    .bubble{
-      background:transparent !important;
-      padding:0 !important;
-      border:none !important;
-      border-radius:0 !important;
-      box-shadow:none !important;
-      background-clip:initial !important;
-    }
-    .them .bubble::before,
-    .me .bubble::after{ display:none !important; }
-
-    .me .bubble .text{
-      color:var(--me-text) !important;
-      -webkit-text-fill-color:var(--me-text) !important;
-    }
-    .them .bubble .text{
-      color:var(--them-text) !important;
-      -webkit-text-fill-color:var(--them-text) !important;
-    }
-
-    .msg.me .time{ margin-right:6px !important; }
-    .msg.them .time{ margin-left:6px !important; }
-
-    .bubble img{
-      display:block; max-width:320px; height:auto;
-      border-radius:12px; cursor:zoom-in;
-      box-shadow:0 12px 28px rgba(2,6,23,.28);
-    }
   </style>
 </head>
 <body>
@@ -216,7 +184,7 @@ app.get('/', (req, res) => {
           <div class="fox">🦊</div>
           <div>
             <div class="title">No-Bubble Chat</div>
-            <div class="subtitle">텍스트-only 라인 · ${APP_VERSION}</div>
+            <div class="subtitle">유휴 끊김 방지 · ${APP_VERSION}</div>
           </div>
         </div>
         <div class="status" id="online">offline</div>
@@ -226,11 +194,13 @@ app.get('/', (req, res) => {
         <div class="divider"><div class="line"></div><div class="txt">오늘</div><div class="line"></div></div>
       </div>
 
-      <div id="viewer" class="viewer" role="dialog" aria-modal="true">
-        <div class="close" id="viewerClose" title="닫기">✕</div>
-        <div class="box"><img id="viewerImg" alt=""></div>
+      <!-- 라이트박스 -->
+      <div id="viewer" class="viewer" role="dialog" aria-modal="true" style="display:none;align-items:center;justify-content:center;background:rgba(1,3,10,.86);position:fixed;inset:0;z-index:50">
+        <div id="viewerClose" title="닫기" style="position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer">✕</div>
+        <div class="box" style="max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000"><img id="viewerImg" alt="" style="max-width:92vw;max-height:92vh;display:block"></div>
       </div>
 
+      <!-- 이모지 패널 -->
       <div id="emojiPanel" class="emoji-panel" style="display:none">
         <div class="emoji-tabs">
           <button id="tabAnimals" class="active" type="button">동물</button>
@@ -240,6 +210,7 @@ app.get('/', (req, res) => {
         <div id="emojiGrid" class="emoji"></div>
       </div>
 
+      <!-- 입력줄 -->
       <div class="inputbar" id="inputbar" style="display:none">
         <div class="inputrow">
           <input id="text" class="text" type="text" placeholder="메시지를 입력하세요" />
@@ -251,6 +222,7 @@ app.get('/', (req, res) => {
         <div class="subtitle" style="margin-top:4px">Enter 전송 · 2MB 이하 첨부 지원</div>
       </div>
 
+      <!-- 초기 설정 -->
       <div id="setup" class="setup">
         <div class="panel">
           <label class="label">대화방 코드</label>
@@ -278,31 +250,21 @@ app.get('/', (req, res) => {
     var inputbar = $('#inputbar');
 
     // 라이트박스
-    var viewer = $('#viewer');
-    var viewerImg = $('#viewerImg');
-    var viewerClose = $('#viewerClose');
-    function openViewer(src, alt){ viewerImg.src = src; viewerImg.alt = alt || ''; viewer.classList.add('active'); }
-    function closeViewer(){ viewer.classList.remove('active'); viewerImg.src=''; }
+    var viewer = $('#viewer'); var viewerImg = $('#viewerImg'); var viewerClose = $('#viewerClose');
+    function openViewer(src, alt){ viewerImg.src = src; viewerImg.alt = alt || ''; viewer.style.display='flex'; }
+    function closeViewer(){ viewer.style.display='none'; viewerImg.src=''; }
     viewer.addEventListener('click', function(e){ if(e.target===viewer) closeViewer(); });
     viewerClose.addEventListener('click', closeViewer);
     window.addEventListener('keydown', function(e){ if(e.key==='Escape') closeViewer(); });
 
     // 이모지
-    var emojiPanel = $('#emojiPanel');
-    var emojiGrid = $('#emojiGrid');
-    var tabAnimals = $('#tabAnimals');
-    var tabFeels = $('#tabFeels');
-    var comboChk = $('#comboMode');
+    var emojiPanel = $('#emojiPanel'), emojiGrid = $('#emojiGrid');
+    var tabAnimals = $('#tabAnimals'), tabFeels = $('#tabFeels'), comboChk = $('#comboMode');
 
     // 입력/상태
-    var roomInput = $('#room');
-    var nickInput = $('#nick');
-    var keyInput = $('#key');
-    var invite = $('#invite');
-    var statusTag = $('#status');
-    var online = $('#online');
-    var fileInput = $('#file');
-    var textInput = $('#text');
+    var roomInput = $('#room'), nickInput = $('#nick'), keyInput = $('#key');
+    var invite = $('#invite'), statusTag = $('#status'), online = $('#online');
+    var fileInput = $('#file'), textInput = $('#text');
 
     function setInviteLink(r){
       var url = new URL(window.location);
@@ -322,7 +284,7 @@ app.get('/', (req, res) => {
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function genId(){ return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
-    // 읽음 처리 조건
+    // 읽음 처리
     var hasFocus = document.hasFocus();
     var visible = document.visibilityState === 'visible';
     function isAttended(){ return hasFocus && visible; }
@@ -406,7 +368,6 @@ app.get('/', (req, res) => {
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
-    // 파일 메시지
     function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return (b/1024).toFixed(1)+' KB'; return (b/1024/1024).toFixed(2)+' MB'; }
     function addFile(fromMe, name, file, id){
       var row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
@@ -452,12 +413,10 @@ app.get('/', (req, res) => {
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
-    // 이모지 데이터/삽입(입력창에만 추가)
+    // 이모지 데이터/삽입
     var animals = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🦋','🐛','🐞','🦖','🦕','🐢','🐍','🦎','🐙','🦑','🦀','🦞','🦐','🐠','🐟','🐡','🐬','🐳','🐋','🐊','🦧','🦍','🦝','🦨','🦦','🦥','🦘','🦡','🦢','🦩','🦚','🦜'];
     var feelings = ['❤️','💖','💕','✨','🔥','🎉','🥳','👍','👏','🤝','🤗','💪','🙂','😊','😂','🤣','🥹','🥺','😡','😎','😱','😘','🤩','😴','😭'];
-    var currentTab = 'animals';
-    var comboMode = false;
-    var pickedAnimal = null;
+    var currentTab = 'animals', comboMode = false, pickedAnimal = null;
 
     function insertAtCursor(input, s){
       input.focus();
@@ -493,9 +452,10 @@ app.get('/', (req, res) => {
     comboChk.onchange = function(){ comboMode = comboChk.checked; pickedAnimal = null; };
     setTabUI(); renderEmoji();
 
-    // 소켓/입장/타이핑/엔터
+    // 소켓 연결
     var socket; var myNick; var myRoom; var joined=false; var typingTimerSend; var typingActive=false; var lastTypingSent=0; var joinGuard;
     var composing = false;
+    var keepAliveTimer = null;
 
     function enableCreate(){ var b=document.querySelector('#create'); if(b) b.disabled=false; }
     function disableCreate(){ var b=document.querySelector('#create'); if(b) b.disabled=true; }
@@ -508,26 +468,47 @@ app.get('/', (req, res) => {
       if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); enableCreate(); return; }
       myNick = n; myRoom = r;
 
-      socket = io({ path:'/socket.io', transports:['websocket','polling'], forceNew:true, reconnection:true, reconnectionAttempts:5, timeout:10000 });
-      joinGuard = setTimeout(function(){ if(!joined){ enableCreate(); addSys('서버 응답 지연. 다시 시도하세요.'); } }, 12000);
+      socket = io({
+        path:'/socket.io',
+        transports:['websocket','polling'],
+        forceNew:true,
+        reconnection:true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 15000
+      });
+      joinGuard = setTimeout(function(){ if(!joined){ enableCreate(); addSys('서버 응답 지연. 다시 시도하세요.'); } }, 16000);
 
-      socket.on('connect', function(){ addSys('서버 연결됨'); });
+      socket.on('connect', function(){ addSys('서버 연결됨'); online.textContent='online'; });
       socket.on('connect_error', function(err){ addSys('연결 실패: ' + (err && err.message ? err.message : err)); alert('연결 실패: ' + (err && err.message ? err.message : err)); enableCreate(); socket.close(); socket=null; });
 
       socket.emit('join', { room: r, nick: n, key: k });
 
       socket.on('joined', function(info){
-        joined = true; clearTimeout(joinGuard); online.textContent = 'online';
+        joined = true; clearTimeout(joinGuard);
         window.socket = socket; window.myRoom = myRoom; window.myNick = myNick;
         setInviteLink(myRoom);
         setup.style.display='none'; inputbar.style.display='block';
         addSys(info.msg);
         history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
         rescanUnread();
+
+        // 앱 레벨 keep-alive: 10s마다 ka 전송
+        if (keepAliveTimer) clearInterval(keepAliveTimer);
+        keepAliveTimer = setInterval(function(){
+          if (socket && socket.connected) socket.emit('ka', Date.now());
+        }, 10_000);
+      });
+
+      socket.on('disconnect', function(reason){
+        online.textContent='offline';
+        if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+        if(!joined) enableCreate();
+        addSys('연결이 끊어졌습니다: ' + reason + ' (자동 재연결 시도)');
       });
 
       socket.on('join_error', function(err){ clearTimeout(joinGuard); addSys('입장 실패: ' + err); alert('입장 실패: ' + err); statusTag.textContent='거부됨'; enableCreate(); socket.disconnect(); socket=null; });
-      socket.on('disconnect', function(reason){ if(!joined) enableCreate(); addSys('연결이 끊어졌습니다: ' + reason); });
 
       socket.on('peer_joined', function(name){ addSys(name + ' 님이 입장했습니다'); });
       socket.on('peer_left', function(name){ addSys(name + ' 님이 퇴장했습니다'); });
@@ -538,8 +519,12 @@ app.get('/', (req, res) => {
       socket.on('read', function(p){ if (!p || !p.id) return; var row = document.querySelector('.msg.me[data-mid="'+p.id+'"]'); if (row){ var badge=row.querySelector('.read'); if(badge) badge.remove(); } });
 
       socket.on('typing', function(p){ if (p && p.state){ showTyping(p.nick || '상대'); } else { hideTyping(); } });
+
+      // 서버의 ka 응답은 무시(그냥 데이터 흐름 유지)
+      socket.on('ka', function(){});
     };
 
+    // 입력/전송/타이핑
     $('#send').onclick = sendMsg;
 
     textInput.addEventListener('compositionstart', function(){ composing = true; });
@@ -564,17 +549,12 @@ app.get('/', (req, res) => {
       typingTimerSend = setTimeout(function(){ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } }, 1500);
     }
 
-    $('#emojiBtn').onclick = function(){
-      emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none');
-    };
+    // 이모지 패널
+    $('#emojiBtn').onclick = function(){ emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none'); };
 
+    // 파일 전송
     $('#attach').onclick = function(){ fileInput.click(); };
-    fileInput.onchange = function(){
-      var files = Array.from(fileInput.files||[]);
-      files.forEach(function(f){ sendFile(f); });
-      fileInput.value = '';
-    };
-
+    fileInput.onchange = function(){ var files = Array.from(fileInput.files||[]); files.forEach(function(f){ sendFile(f); }); fileInput.value = ''; };
     document.addEventListener('paste', function(e){
       if(!joined) return;
       var items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
@@ -662,6 +642,7 @@ io.on('connection', (socket) => {
     socket.to(room).emit('msg', { id, nick, text, ts: now() });
   });
 
+  // 파일
   const ALLOWED_TYPES = new Set(['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel']);
   const MAX_BYTES = 2_000_000;
   const MAX_DATAURL = 7_000_000;
@@ -697,6 +678,11 @@ io.on('connection', (socket) => {
     room = sanitize(room, 40);
     const nick = sanitize(socket.data.nick, 24) || '게스트';
     socket.to(room).emit('typing', { nick, state: !!state });
+  });
+
+  // 앱 레벨 keep-alive: 클라이언트가 보낸 ka에 즉시 응답
+  socket.on('ka', () => {
+    socket.emit('ka', Date.now());
   });
 
   socket.on('disconnect', () => {
