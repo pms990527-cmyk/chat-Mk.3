@@ -1,8 +1,7 @@
 /**
- * Multi-user Chat — Cloud Cat / Fox
- * - 탭깜빡임(제목+파비콘), 데스크톱 알림, 소리 알림 각각 독립 토글
- * - 알림 끄기 즉시 반영(소리/깜빡임/데스크톱)
- * - 재연결 시 방 자동 재조인, keep-alive, 읽음 카운트, 이모지/파일, 테마 전환
+ * Multi-user Chat — Cloud Cat / Fox (Slim)
+ * - 기준본 기능 동일: 테마 전환, 탭 깜빡임, 데스크톱/소리 알림, 읽음 카운트, 이모지/파일, 타이핑, 재연결, keep-alive
+ * - 간소화: 렌더러 통합(renderMessage), 알림/가시성/스크롤 헬퍼, 토글 모듈화, 중복 제거
  */
 const express = require('express');
 const http = require('http');
@@ -11,7 +10,7 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 
-// 타임아웃 튜닝
+// 타임아웃
 server.headersTimeout = 65_000;
 server.keepAliveTimeout = 61_000;
 
@@ -23,28 +22,21 @@ const io = new Server(server, {
   maxHttpBufferSize: 8_000_000
 });
 
-const APP_VERSION = 'v-2025-09-22-flash-favicon-fix';
+const APP_VERSION = 'v-2025-09-22-slim-01';
 
+// ===== In-memory rooms =======================================================
+/** room = { key, users:Set<sid>, lastMsgs:[], unread: Map<msgId, Set<sid>> } */
 const rooms = new Map();
-/**
- * room = { key, users:Set<sid>, lastMsgs:[], unread: Map<msgId, Set<sid>> }
- */
-function getRoom(roomId) {
-  if (!rooms.has(roomId)) rooms.set(roomId, { key: null, users: new Set(), lastMsgs: [], unread: new Map() });
-  return rooms.get(roomId);
-}
-function sanitize(str, max = 200) {
-  if (typeof str !== 'string') return '';
-  return str.replace(/[<>]/g, '').slice(0, max);
-}
-function now() { return Date.now(); }
+const getRoom = id => rooms.get(id) || rooms.set(id, { key: null, users: new Set(), lastMsgs: [], unread: new Map() }).get(id);
+const now = () => Date.now();
+const sanitize = (s, max = 200) => typeof s === 'string' ? s.replace(/[<>]/g, '').slice(0, max) : '';
 function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   const t = now();
   room.lastMsgs = room.lastMsgs.filter(m => t - m.t < windowMs);
-  const count = room.lastMsgs.reduce((acc, m) => acc + (m.from === socketId ? 1 : 0), 0);
-  return count >= limit;
+  return room.lastMsgs.reduce((n, m) => n + (m.from === socketId ? 1 : 0), 0) >= limit;
 }
 
+// ===== Routes =================================================================
 app.get('/healthz', (_, res) => res.status(200).type('text/plain').send('ok'));
 
 app.get('/', (req, res) => {
@@ -63,10 +55,10 @@ app.get('/', (req, res) => {
     --chat-bg: linear-gradient(180deg,#f0f9ff,#ffffff);
     --card-bg: rgba(255,255,255,.86);
     --border: rgba(14,165,233,.18);
-    --accent: #0ea5e9; --accent-weak:#38bdf8;
+    --accent:#0ea5e9; --accent-weak:#38bdf8;
     --ink:#0f172a; --muted:#64748b;
-    --meBg:#dff3ff; --themBg:#ffffff;
-    --meText:#083344; --themText:#0f172a;
+    --meBg:#dff3ff; --meText:#083344;
+    --themBg:#ffffff; --themText:#0f172a;
     --avatar-bg:#bae6fd;
     --shadow-soft: rgba(2,6,23,.08); --shadow-strong: rgba(2,132,199,.25);
     --header-h:58px;
@@ -119,7 +111,7 @@ app.get('/', (req, res) => {
   .btn-flat.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(14,165,233,.15) inset}
   .badge{background:var(--accent);color:#fff;border-radius:999px;padding:2px 8px;font-size:11px}
 
-  .chat{flex:1;min-height:0;overflow:auto;background:var(--chat-bg);padding:14px 14px 110px 14px}
+  .chat{flex:1;min-height:0;overflow:auto;background:var(--chat-bg);padding:14px 14px 110px}
   .divider{display:flex;align-items:center;gap:8px;margin:8px 0}
   .divider .line{height:1px;background:var(--border);flex:1}
   .divider .txt{font-size:12px;color:var(--accent);font-family:ui-serif, Georgia, serif}
@@ -218,497 +210,377 @@ app.get('/', (req, res) => {
 
 <script src="/socket.io/socket.io.js?v=${APP_VERSION}"></script>
 <script>
-  var $ = function(s){ return document.querySelector(s); };
-  var chatBox = $('#chat'), setup = $('#setup'), inputbar = $('#inputbar');
+(() => {
+  // ===== Helpers =============================================================
+  const $ = s => document.querySelector(s);
+  const on = (el, ev, fn, opt) => el.addEventListener(ev, fn, opt);
+  const fmt = ts => { const d=new Date(ts); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
+  const esc = s => (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const genId = () => 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+  const scrollBottom = box => box.scrollTop = box.scrollHeight;
 
-  // ==== Theme & Favicon ======================================================
-  var THEME_KEY='chat_theme';
-  var themeSel = $('#themeSel'), brandTitle = $('#brandTitle'), brandIcon = $('#brandIcon'), statusIcon = $('#statusIcon');
-  var favLink = $('#favicon');
-  var baseTitle = document.title;
-  var favBaseEmoji = '🐱', favAlertEmoji = '🔔';
-  var favBaseURL = '', favAlertURL = '';
+  const chatBox = $('#chat'), setup = $('#setup'), inputbar = $('#inputbar');
+  const roomInput = $('#room'), nickInput = $('#nick'), keyInput = $('#key');
+  const invite = $('#invite'), statusTag = $('#status'), online = $('#online');
+  const fileInput = $('#file'), textInput = $('#text');
+  const themeSel = $('#themeSel'), brandTitle = $('#brandTitle'), brandIcon = $('#brandIcon'), statusIcon = $('#statusIcon');
+  const favLink = $('#favicon');
 
-  function drawFavicon(emoji){
-    var c = document.createElement('canvas'); c.width = 64; c.height = 64;
-    var ctx = c.getContext('2d');
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,64,64);
-    ctx.font = '48px serif'; ctx.textAlign = 'center'; ctx.textBaseline='middle';
-    ctx.fillText(emoji, 32, 40);
+  // ===== Theme & Favicon =====================================================
+  const THEME_KEY='chat_theme';
+  let favBaseEmoji = '🐱', favAlertEmoji = '🔔';
+  let favBaseURL = '', favAlertURL = '';
+  const baseTitle = document.title;
+
+  const drawFavicon = emoji => {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,64,64);
+    ctx.font = '48px serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(emoji, 32, 40);
     return c.toDataURL('image/png');
-  }
-  function setFavicon(url){ if (favLink) { favLink.href = url; } }
+  };
+  const setFavicon = url => { if (favLink) favLink.href = url; };
 
   function applyTheme(t){
     document.documentElement.setAttribute('data-theme', t);
     localStorage.setItem(THEME_KEY, t);
     if (t === 'fox'){ brandTitle.textContent='Fox Chat'; brandIcon.textContent='🦊'; statusIcon.textContent='🔥'; favBaseEmoji='🦊'; }
-    else { brandTitle.textContent='Cloud Cat Chat'; brandIcon.textContent='🐱'; statusIcon.textContent='☁️'; favBaseEmoji='🐱'; }
+    else           { brandTitle.textContent='Cloud Cat Chat'; brandIcon.textContent='🐱'; statusIcon.textContent='☁️'; favBaseEmoji='🐱'; }
     favBaseURL = drawFavicon(favBaseEmoji);
     favAlertURL = drawFavicon(favAlertEmoji);
     setFavicon(favBaseURL);
   }
-  var savedTheme = localStorage.getItem(THEME_KEY) || 'cloud';
-  themeSel.value = savedTheme; applyTheme(savedTheme);
-  themeSel.onchange = function(){ applyTheme(themeSel.value); };
-  function peerEmoji(){ return (document.documentElement.getAttribute('data-theme') === 'fox') ? '🦊' : '🐾'; }
+  themeSel.value = localStorage.getItem(THEME_KEY) || 'cloud';
+  applyTheme(themeSel.value);
+  on(themeSel, 'change', () => applyTheme(themeSel.value));
+  const peerEmoji = () => (document.documentElement.getAttribute('data-theme') === 'fox') ? '🦊' : '🐾';
 
-  // ==== State & helpers ======================================================
-  var roomInput = $('#room'), nickInput = $('#nick'), keyInput = $('#key');
-  var invite = $('#invite'), statusTag = $('#status'), online = $('#online');
-  var fileInput = $('#file'), textInput = $('#text');
-
-  function setInviteLink(r){
-    var url = new URL(window.location); url.searchParams.set('room', r);
-    invite.textContent = url.toString();
-  }
-  $('#makeLink').onclick = function(){
-    var r = (roomInput.value||'').trim();
-    if(!r){ alert('방 코드를 입력하세요'); return; }
-    setInviteLink(r);
+  // ===== Visibility & Notify =================================================
+  const State = {
+    hasFocus: document.hasFocus(),
+    visible: document.visibilityState === 'visible',
+    get attended(){ return this.hasFocus && this.visible; }
   };
-
-  function addSys(msg){
-    var d = document.createElement('div'); d.className='sys'; d.textContent = msg;
-    chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight;
-  }
-  function fmt(ts){ var d=new Date(ts); var h=String(d.getHours()).padStart(2,'0'); var m=String(d.getMinutes()).padStart(2,'0'); return h+':'+m; }
-  function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-  function genId(){ return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
-
-  // ==== Attention/visibility =================================================
-  var hasFocus = document.hasFocus();
-  var visible = document.visibilityState === 'visible';
-  function isAttended(){ return hasFocus && visible; }
-  window.addEventListener('focus', function(){ hasFocus = true; clearUnseen(); rescanUnread(); stopFlash(); setFavicon(favBaseURL); });
-  window.addEventListener('blur', function(){ hasFocus = false; });
-  document.addEventListener('visibilitychange', function(){
-    visible = document.visibilityState === 'visible';
-    if (visible) { clearUnseen(); rescanUnread(); stopFlash(); setFavicon(favBaseURL); }
+  on(window, 'focus', () => { State.hasFocus = true; Notify.clearUnseen(); rescanUnread(); Notify.stopFlash(); setFavicon(favBaseURL); });
+  on(window, 'blur', () => { State.hasFocus = false; });
+  on(document, 'visibilitychange', () => {
+    State.visible = document.visibilityState === 'visible';
+    if (State.visible) { Notify.clearUnseen(); rescanUnread(); Notify.stopFlash(); setFavicon(favBaseURL); }
   });
 
-  // ==== Notification toggles =================================================
-  var LS = { flash:'flash_on', notify:'notify_on', sound:'sound_on' };
-  var flashEnabled  = (localStorage.getItem(LS.flash)  ?? '1') === '1';   // 기본 켜짐
-  var notifyEnabled = (localStorage.getItem(LS.notify) ?? '0') === '1';
-  var soundEnabled  = (localStorage.getItem(LS.sound)  ?? '0') === '1';
+  const LS = { flash:'flash_on', notify:'notify_on', sound:'sound_on' };
+  const Notify = (() => {
+    let unseenTotal = 0, flasher = null, flip = false;
+    let flashOn  = (localStorage.getItem(LS.flash)  ?? '1') === '1';
+    let deskOn   = (localStorage.getItem(LS.notify) ?? '0') === '1';
+    let soundOn  = (localStorage.getItem(LS.sound)  ?? '0') === '1';
 
-  var flashBtn = $('#flashBtn'), notifyBtn = $('#notifyBtn'), soundBtn = $('#soundBtn');
-  function updateToggleUI(){
-    flashBtn.classList.toggle('active', flashEnabled);
-    notifyBtn.classList.toggle('active', notifyEnabled);
-    soundBtn.classList.toggle('active', soundEnabled);
-    notifyBtn.textContent = notifyEnabled ? '🔔' : '🔕';
-    soundBtn.textContent  = soundEnabled ? '🔊' : '🔈';
-  }
-  updateToggleUI();
+    const badge = $('#unseenBadge');
+    const flashBtn = $('#flashBtn'), notifyBtn = $('#notifyBtn'), soundBtn = $('#soundBtn');
 
-  flashBtn.onclick = function(){
-    flashEnabled = !flashEnabled; localStorage.setItem(LS.flash, flashEnabled ? '1':'0'); updateToggleUI();
-    if (!flashEnabled) { stopFlash(); setFavicon(favBaseURL); }
-  };
-  notifyBtn.onclick = function(){
-    if (!('Notification' in window)) { alert('이 브라우저는 데스크톱 알림을 지원하지 않습니다.'); return; }
-    if (Notification.permission === 'granted') {
-      notifyEnabled = !notifyEnabled; localStorage.setItem(LS.notify, notifyEnabled ? '1':'0'); updateToggleUI();
-    } else {
-      Notification.requestPermission().then(function(p){
-        notifyEnabled = (p === 'granted'); localStorage.setItem(LS.notify, notifyEnabled ? '1':'0'); updateToggleUI();
-      });
-    }
-  };
-  soundBtn.onclick = function(){
-    soundEnabled = !soundEnabled; localStorage.setItem(LS.sound, soundEnabled ? '1':'0'); updateToggleUI();
-  };
+    // Audio
+    let audioCtx = null, unlocked = false;
+    const unlock = () => {
+      if (unlocked) return;
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        g.gain.value = 0; o.connect(g); g.connect(audioCtx.destination); o.start(); setTimeout(()=>o.stop(), 30);
+        unlocked = true;
+      } catch {}
+    };
+    on(document, 'click', unlock, { once:true }); on(document, 'keydown', unlock, { once:true });
+    const beep = () => {
+      if (!soundOn) return;
+      if (!audioCtx) try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return; }
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type='triangle'; o.frequency.value=880;
+      g.gain.setValueAtTime(0, audioCtx.currentTime);
+      g.gain.linearRampToValueAtTime(0.03, audioCtx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.2);
+      o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + 0.22);
+    };
 
-  // ==== Beep (소리 토글에 묶음) ==============================================
-  var audioCtx = null, audioUnlocked = false;
-  function unlockAudioOnce(){
-    if (audioUnlocked) return;
-    try{
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      g.gain.value = 0; o.connect(g); g.connect(audioCtx.destination);
-      o.start(); setTimeout(function(){ try{o.stop();}catch(e){} }, 30);
-      audioUnlocked = true;
-    }catch(e){}
-  }
-  document.addEventListener('click', unlockAudioOnce, { once:true });
-  document.addEventListener('keydown', unlockAudioOnce, { once:true });
-  function beep(){
-    if (!soundEnabled) return;             // ← 소리 토글 적용
-    if (!audioCtx) { try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ return; } }
-    var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = 'triangle'; o.frequency.value = 880;
-    g.gain.setValueAtTime(0, audioCtx.currentTime);
-    g.gain.linearRampToValueAtTime(0.03, audioCtx.currentTime + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.2);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(); o.stop(audioCtx.currentTime + 0.22);
-  }
+    // Toggles
+    const updateUI = () => {
+      flashBtn.classList.toggle('active', flashOn);
+      notifyBtn.classList.toggle('active', deskOn);
+      soundBtn.classList.toggle('active', soundOn);
+      notifyBtn.textContent = deskOn ? '🔔' : '🔕';
+      soundBtn.textContent  = soundOn ? '🔊' : '🔈';
+    };
+    updateUI();
 
-  // ==== Unseen + Tab flash (title + favicon) =================================
-  var unseenBadge = $('#unseenBadge');
-  var unseenTotal = 0;
-  var titleFlasher = null, flashOn = false;
+    flashBtn.onclick = () => { flashOn = !flashOn; localStorage.setItem(LS.flash, flashOn?'1':'0'); updateUI(); if (!flashOn) stopFlash(); };
+    notifyBtn.onclick = async () => {
+      if (!('Notification' in window)) return alert('이 브라우저는 데스크톱 알림을 지원하지 않습니다.');
+      if (Notification.permission !== 'granted') {
+        deskOn = (await Notification.requestPermission()) === 'granted';
+      } else deskOn = !deskOn;
+      localStorage.setItem(LS.notify, deskOn?'1':'0'); updateUI();
+    };
+    soundBtn.onclick = () => { soundOn = !soundOn; localStorage.setItem(LS.sound, soundOn?'1':'0'); updateUI(); };
 
-  function startFlash(){
-    if (!flashEnabled) return;         // 토글 꺼져 있으면 안 깜빡임
-    if (titleFlasher) return;
-    titleFlasher = setInterval(function(){
-      flashOn = !flashOn;
-      document.title = flashOn ? '🔔 ' + unseenTotal + ' 새 메시지' : baseTitle;
-      setFavicon(flashOn ? favAlertURL : favBaseURL);
-    }, 900);
-  }
-  function stopFlash(){
-    if (titleFlasher){ clearInterval(titleFlasher); titleFlasher = null; }
-    document.title = baseTitle;
-  }
-  function bumpUnseen(){
-    unseenTotal++;
-    unseenBadge.textContent = String(unseenTotal);
-    unseenBadge.style.display = 'inline-block';
-    startFlash();              // 플래시 토글이 꺼져 있으면 내부에서 패스
-    if (soundEnabled) beep();  // 소리 토글 반영
-  }
-  function clearUnseen(){
-    unseenTotal = 0;
-    unseenBadge.style.display = 'none';
-    stopFlash(); setFavicon(favBaseURL);
-  }
+    // Flash
+    const startFlash = () => {
+      if (!flashOn || flasher) return;
+      flasher = setInterval(() => {
+        flip = !flip;
+        document.title = flip ? '🔔 ' + unseenTotal + ' 새 메시지' : '${esc(baseTitle)}';
+        setFavicon(flip ? favAlertURL : favBaseURL);
+      }, 900);
+    };
+    const stopFlash = () => { if (flasher){ clearInterval(flasher); flasher=null; } document.title='${esc(baseTitle)}'; setFavicon(favBaseURL); };
 
-  function showDesktopNote(title, body){
-    if (!notifyEnabled || !('Notification' in window) || Notification.permission !== 'granted') return;
-    try{
-      var n = new Notification(title, { body: body, tag: 'room-'+(window.myRoom||'') });
-      n.onclick = function(){ window.focus(); n.close(); };
-      setTimeout(function(){ try{ n.close(); } catch(e){} }, 5000);
-    }catch(e){}
-  }
+    const bump = () => { unseenTotal++; badge.textContent=String(unseenTotal); badge.style.display='inline-block'; startFlash(); if (soundOn) beep(); };
+    const clearUnseen = () => { unseenTotal=0; badge.style.display='none'; stopFlash(); };
+    const desktop = (title, body) => {
+      if (!deskOn || !('Notification' in window) || Notification.permission !== 'granted') return;
+      try {
+        const n = new Notification(title, { body, tag: 'room-'+(window.myRoom||'') });
+        n.onclick = () => { window.focus(); n.close(); };
+        setTimeout(()=>{ try{ n.close(); }catch{} }, 5000);
+      } catch {}
+    };
 
-  function onIncoming(kind, payload){
-    if (isAttended()) return;  // 창을 보고 있으면 알림 안 띄움
-    if (kind === 'msg'){
-      var icon = document.documentElement.getAttribute('data-theme') === 'fox' ? '🦊' : '🐱';
-      showDesktopNote(icon + ' 새 메시지', (payload.nick||'상대') + ': ' + String(payload.text||'').slice(0,80));
-    } else if (kind === 'file'){
-      var icon2 = document.documentElement.getAttribute('data-theme') === 'fox' ? '🦊' : '🐱';
-      var name = payload.name || '파일';
-      showDesktopNote(icon2 + ' 파일 도착', (payload.nick||'상대') + '님이 ' + name + '을 보냈습니다');
-    }
-    bumpUnseen();
-  }
+    return { bump, clearUnseen, startFlash, stopFlash, desktop };
+  })();
 
-  // ==== Read tracking ========================================================
-  var readSent = new Set();
-  function sendRead(id){
-    if (!window.socket || readSent.has(id)) return;
-    readSent.add(id);
-    window.socket.emit('read', { room: myRoom, id: id });
-  }
-  var OBS_THRESHOLD = 0.75;
-  var observer = new IntersectionObserver(function(entries){
-    if (!isAttended()) return;
-    entries.forEach(function(e){
+  // ===== Invite link =====
+  const setInviteLink = r => { const u=new URL(window.location); u.searchParams.set('room', r); invite.textContent=u.toString(); };
+  $('#makeLink').onclick = () => { const r=(roomInput.value||'').trim(); if(!r) return alert('방 코드를 입력하세요'); setInviteLink(r); };
+
+  // ===== System line =====
+  const addSys = msg => { const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); scrollBottom(chatBox); };
+
+  // ===== Read tracking (IntersectionObserver) ================================
+  const readSent = new Set();
+  const sendRead = id => { if (!window.socket || readSent.has(id)) return; readSent.add(id); window.socket.emit('read', { room: myRoom, id }); };
+  const OBS_THRESHOLD = 0.75;
+  const observer = new IntersectionObserver((entries)=>{
+    if (!State.attended) return;
+    entries.forEach(e => {
       if (e.intersectionRatio >= OBS_THRESHOLD) {
-        var id = e.target.getAttribute('data-mid');
+        const id = e.target.getAttribute('data-mid');
         if (id && !readSent.has(id)) sendRead(id);
       }
     });
   }, { root: chatBox, threshold: [OBS_THRESHOLD] });
   function rescanUnread(){
-    if (!isAttended()) return;
-    document.querySelectorAll('.msg.them[data-mid]').forEach(function(el){
-      var id = el.getAttribute('data-mid');
-      if (!id || readSent.has(id)) return;
+    if (!State.attended) return;
+    document.querySelectorAll('.msg.them[data-mid]').forEach(el=>{
+      const id = el.getAttribute('data-mid'); if (!id || readSent.has(id)) return;
       observer.observe(el);
     });
   }
 
-  // ==== Typing indicator =====================================================
-  var typingFlag = document.createElement('div');
-  typingFlag.className = 'typing-flag';
-  typingFlag.style.cssText = 'position:sticky;bottom:8px;left:0;display:none;align-items:center;gap:8px;background:#fff;border:1px solid rgba(14,165,233,.22);padding:6px 10px;border-radius:12px;color:#0f172a;font-size:12px;box-shadow:0 8px 24px rgba(2,6,23,.08);max-width:70%';
-  typingFlag.innerHTML = '<span class="who" style="color:var(--accent);font-weight:600"></span> 입력 중 <span class="dots"><i></i><i></i><i></i></span>';
-  var typingWho = typingFlag.querySelector('.who');
-  var typingHideTimer = null;
-  function showTyping(name){
-    typingWho.textContent = name || '상대';
-    typingFlag.style.display = 'inline-flex';
-    chatBox.appendChild(typingFlag);
-    clearTimeout(typingHideTimer);
-    typingHideTimer = setTimeout(hideTyping, 1500);
-  }
-  function hideTyping(){ typingFlag.style.display = 'none'; }
+  // ===== Typing indicator ====================================================
+  const typingFlag = (() => {
+    const box = document.createElement('div');
+    box.className = 'typing-flag';
+    box.style.cssText = 'position:sticky;bottom:8px;left:0;display:none;align-items:center;gap:8px;background:#fff;border:1px solid rgba(14,165,233,.22);padding:6px 10px;border-radius:12px;color:#0f172a;font-size:12px;box-shadow:0 8px 24px rgba(2,6,23,.08);max-width:70%';
+    box.innerHTML = '<span class="who" style="color:var(--accent);font-weight:600"></span> 입력 중 <span class="dots"><i></i><i></i><i></i></span>';
+    document.body.appendChild(box);
+    return { box, who: box.querySelector('.who'), hideTimer: null,
+      show(name){ this.who.textContent = name || '상대'; this.box.style.display='inline-flex'; chatBox.appendChild(this.box); clearTimeout(this.hideTimer); this.hideTimer = setTimeout(()=>this.hide(), 1500); },
+      hide(){ this.box.style.display='none'; }
+    };
+  })();
 
-  // ==== Renderers ============================================================
-  function makeStack(){ var s = document.createElement('div'); s.className = 'stack'; return s; }
-  function addMsg(fromMe, name, text, ts, id){
-    var row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
-    if(id) row.setAttribute('data-mid', id);
+  // ===== Renderer (text/file 통합) ===========================================
+  const makeStack = () => { const s=document.createElement('div'); s.className='stack'; return s; };
 
-    if(!fromMe){
-      var av = document.createElement('div'); av.className='avatar'; av.textContent = peerEmoji();
-      row.appendChild(av);
+  function renderMessage({fromMe, name, text, file, ts, id}){
+    const row = document.createElement('div'); row.className='msg ' + (fromMe?'me':'them'); if (id) row.dataset.mid = id;
+
+    if(!fromMe){ const av=document.createElement('div'); av.className='avatar'; av.textContent = peerEmoji(); row.appendChild(av); }
+    else { const t=document.createElement('span'); t.className='time'; t.textContent=fmt(ts||Date.now()); row.appendChild(t); }
+
+    const stack = makeStack();
+    if(!fromMe){ const nm = document.createElement('div'); nm.className='name'; nm.textContent = name || '상대'; stack.appendChild(nm); }
+
+    const content = document.createElement('div'); content.className='content';
+    if (file){
+      if ((file.type||'').startsWith('image/')){
+        const img = document.createElement('img'); img.src = file.data; img.alt = file.name || 'image';
+        on(img, 'click', () => openViewer(img.src, img.alt));
+        content.appendChild(img);
+        const meta = document.createElement('div'); meta.className='att';
+        meta.innerHTML = '<a href="'+file.data+'" download="'+esc(file.name||'image')+'">이미지 저장</a><span class="size"> '+humanSize(file.size||0)+'</span>';
+        content.appendChild(meta);
+      } else {
+        const meta = document.createElement('div'); meta.className='att';
+        meta.innerHTML = '파일: <a href="'+file.data+'" download="'+esc(file.name||'file')+'">'+esc(file.name||'file')+'</a><span class="size"> '+humanSize(file.size||0)+'</span>';
+        content.appendChild(meta);
+      }
     } else {
-      var t = document.createElement('span'); t.className='time'; t.textContent = fmt(ts||Date.now()); row.appendChild(t);
-    }
-
-    var stack = makeStack();
-    if(!fromMe){
-      var nm = document.createElement('div'); nm.className='name'; nm.textContent = name || '상대';
-      stack.appendChild(nm);
-    }
-    var content = document.createElement('div'); content.className='content';
-    var p = document.createElement('div'); p.className='text'; p.textContent = text; content.appendChild(p);
-    stack.appendChild(content);
-    row.appendChild(stack);
-
-    if(fromMe){
-      var badge = document.createElement('span'); badge.className='unread'; badge.textContent=''; row.appendChild(badge);
-    } else {
-      var t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(ts||Date.now()); row.appendChild(t2);
-    }
-
-    chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
-    chatBox.appendChild(typingFlag);
-    if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
-  }
-
-  function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return (b/1024).toFixed(1)+' KB'; return (b/1024/1024).toFixed(2)+' MB'; }
-  function addFile(fromMe, name, file, id){
-    var row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
-    if(id) row.setAttribute('data-mid', id);
-
-    if(!fromMe){
-      var av = document.createElement('div'); av.className='avatar'; av.textContent = peerEmoji();
-      row.appendChild(av);
-    } else {
-      var t = document.createElement('span'); t.className='time'; t.textContent = fmt(file.ts||Date.now()); row.appendChild(t);
-    }
-
-    var stack = makeStack();
-    if(!fromMe){
-      var nm = document.createElement('div'); nm.className='name'; nm.textContent = name || '상대';
-      stack.appendChild(nm);
-    }
-
-    var content = document.createElement('div'); content.className='content';
-    if ((file.type||'').startsWith('image/')) {
-      var img = document.createElement('img'); img.src = file.data; img.alt = file.name || 'image';
-      img.addEventListener('click', function(){ openViewer(img.src, img.alt); });
-      content.appendChild(img);
-      var meta = document.createElement('div'); meta.className='att';
-      meta.innerHTML = '<a href="' + file.data + '" download="' + esc(file.name||'image') + '">이미지 저장</a><span class="size"> ' + humanSize(file.size||0) + '</span>';
-      content.appendChild(meta);
-    } else {
-      var meta2 = document.createElement('div'); meta2.className='att';
-      meta2.innerHTML = '파일: <a href="' + file.data + '" download="' + esc(file.name||'file') + '">' + esc(file.name||'file') + '</a><span class="size"> ' + humanSize(file.size||0) + '</span>';
-      content.appendChild(meta2);
+      const p = document.createElement('div'); p.className='text'; p.textContent = text || ''; content.appendChild(p);
     }
     stack.appendChild(content);
     row.appendChild(stack);
 
-    if(fromMe){
-      var badge = document.createElement('span'); badge.className='unread'; badge.textContent=''; row.appendChild(badge);
-    } else {
-      var t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(file.ts||Date.now()); row.appendChild(t2);
-    }
+    if(fromMe){ const b=document.createElement('span'); b.className='unread'; b.textContent=''; row.appendChild(b); }
+    else { const t2=document.createElement('span'); t2.className='time'; t2.textContent = fmt(ts||Date.now()); row.appendChild(t2); }
 
-    chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
-    chatBox.appendChild(typingFlag);
-    if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
+    chatBox.appendChild(row); scrollBottom(chatBox); chatBox.appendChild(typingFlag.box);
+    if(!fromMe && id){ observer.observe(row); if (State.attended) rescanUnread(); }
   }
 
-  // 라이트박스
-  var viewer = document.createElement('div');
-  viewer.id='viewer'; viewer.className='viewer';
-  viewer.style.cssText='position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,.7);z-index:50';
-  viewer.innerHTML = '<div class="close" id="viewerClose" title="닫기" style="position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer">✕</div><div class="box" style="max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000"><img id="viewerImg" alt=""></div>';
-  document.body.appendChild(viewer);
-  var viewerImg = $('#viewerImg'), viewerClose = $('#viewerClose');
-  function openViewer(src, alt){ viewerImg.src = src; viewerImg.alt = alt || ''; viewer.style.display='flex'; }
-  function closeViewer(){ viewer.style.display='none'; viewerImg.src=''; }
-  viewer.addEventListener('click', function(e){ if(e.target===viewer) closeViewer(); });
-  viewerClose.addEventListener('click', closeViewer);
-  window.addEventListener('keydown', function(e){ if(e.key==='Escape') closeViewer(); });
+  const humanSize = b => b<1024 ? b+' B' : b<1048576 ? (b/1024).toFixed(1)+' KB' : (b/1048576).toFixed(2)+' MB';
 
-  // ==== Emoji 최소 구현(입력창 삽입) =========================================
-  var emojiBtn = $('#emojiBtn');
-  emojiBtn.onclick = function(){
-    var em = ['😀','😆','😊','😉','😍','😘','😎','🤗','🤔','😴','😇','🥳','😭','😡','👍','👏','🙏','💪','🔥','✨'];
-    var s = prompt('이모지 선택: ' + em.join(' '));
+  // ===== Lightbox ============================================================
+  const viewer = (() => {
+    const el = document.createElement('div');
+    el.style.cssText='position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,.7);z-index:50';
+    el.innerHTML = '<div id="vClose" style="position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer">✕</div><div style="max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000"><img id="vImg" alt=""></div>';
+    document.body.appendChild(el);
+    const img = el.querySelector('#vImg'), close = el.querySelector('#vClose');
+    const open = (src, alt) => { img.src=src; img.alt=alt||''; el.style.display='flex'; };
+    const hide = () => { el.style.display='none'; img.src=''; };
+    on(el, 'click', e => { if (e.target === el) hide(); });
+    on(close, 'click', hide);
+    on(window, 'keydown', e => { if (e.key==='Escape') hide(); });
+    return { open, hide };
+  })();
+  const openViewer = viewer.open;
+
+  // ===== Emoji minimal =======================================================
+  $('#emojiBtn').onclick = () => {
+    const em = ['😀','😆','😊','😉','😍','😘','😎','🤗','🤔','😴','😇','🥳','😭','😡','👍','👏','🙏','💪','🔥','✨'];
+    const s = prompt('이모지 선택: ' + em.join(' '));
     if (s) {
-      var pos = textInput.selectionStart || textInput.value.length;
+      const pos = textInput.selectionStart ?? textInput.value.length;
       textInput.value = textInput.value.slice(0,pos) + s + textInput.value.slice(pos);
       textInput.focus(); textInput.setSelectionRange(pos+s.length, pos+s.length);
     }
   };
 
-  // ==== Socket / Join / Keep-alive ==========================================
-  var socket; var myNick; var myRoom; var myKey=''; var joined=false; var typingTimerSend; var typingActive=false; var lastTypingSent=0; var joinGuard;
-  var composing = false; var keepAliveTimer = null;
+  // ===== Socket / Join / Keep-alive =========================================
+  let socket, myNick, myRoom, myKey = '', joined = false, typingTimerSend, typingActive=false, lastTyping=0, composing=false, keepAlive=null;
 
-  function enableCreate(){ var b=$('#create'); if(b) b.disabled=false; }
-  function disableCreate(){ var b=$('#create'); if(b) b.disabled=true; }
+  const enableCreate = () => { const b=$('#create'); if(b) b.disabled=false; };
+  const disableCreate = () => { const b=$('#create'); if(b) b.disabled=true; };
 
-  $('#create').onclick = function(){
+  $('#create').onclick = () => {
     if (socket) return; disableCreate();
-    var r = (roomInput.value || '').trim();
-    var n = (nickInput.value || '').trim();
-    var k = (keyInput.value || '').trim();
+    const r = (roomInput.value||'').trim(), n = (nickInput.value||'').trim(), k=(keyInput.value||'').trim();
     if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); enableCreate(); return; }
-    myNick = n; myRoom = r; myKey = k;
+    myRoom=r; myNick=n; myKey=k;
 
-    socket = io({
-      path:'/socket.io',
-      transports:['websocket','polling'],
-      forceNew:true,
-      reconnection:true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 15000
-    });
-    joinGuard = setTimeout(function(){ if(!joined){ enableCreate(); addSys('서버 응답 지연. 다시 시도하세요.'); } }, 16000);
+    socket = io({ path:'/socket.io', transports:['websocket','polling'], forceNew:true, reconnection:true, reconnectionAttempts:Infinity, reconnectionDelay:1000, reconnectionDelayMax:5000, timeout:15000 });
+    const join = () => socket.emit('join', { room: myRoom, nick: myNick, key: myKey||'' });
+    const joinGuard = setTimeout(()=>{ if(!joined){ enableCreate(); addSys('서버 응답 지연. 다시 시도하세요.'); } }, 16000);
 
-    socket.on('connect', function(){
-      online.textContent='online';
-      if (joined && myRoom && myNick) socket.emit('join', { room: myRoom, nick: myNick, key: myKey || '' });
-    });
-    socket.on('reconnect', function(){
-      if (myRoom && myNick) socket.emit('join', { room: myRoom, nick: myNick, key: myKey || '' });
-    });
-    socket.on('connect_error', function(err){ addSys('연결 실패: ' + (err && err.message ? err.message : err)); enableCreate(); });
+    socket.on('connect',  () => { online.textContent='online'; if (joined) join(); });
+    socket.on('reconnect',() => { join(); });
+    socket.on('connect_error', err => { addSys('연결 실패: '+(err?.message||err)); enableCreate(); });
 
-    // 최초 조인
-    socket.emit('join', { room: r, nick: n, key: k });
+    join();
 
-    socket.on('joined', function(info){
-      joined = true; clearTimeout(joinGuard);
-      window.socket = socket; window.myRoom = myRoom; window.myNick = myNick;
-      setInviteLink(myRoom);
-      setup.style.display='none'; inputbar.style.display='block';
-      addSys(info.msg);
-      history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
+    socket.on('joined', info => {
+      joined = true; window.socket = socket; window.myRoom = myRoom; window.myNick = myNick;
+      setInviteLink(myRoom); setup.style.display='none'; inputbar.style.display='block';
+      addSys(info.msg); history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
       rescanUnread();
-      if (keepAliveTimer) clearInterval(keepAliveTimer);
-      keepAliveTimer = setInterval(function(){ if (socket && socket.connected) socket.emit('ka', Date.now()); }, 10_000);
-    });
-
-    socket.on('disconnect', function(reason){
-      online.textContent='offline';
-      if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
-      addSys('연결이 끊어졌습니다: ' + reason + ' (자동 재연결 시도)');
-      enableCreate();
-    });
-
-    socket.on('join_error', function(err){
+      if (keepAlive) clearInterval(keepAlive);
+      keepAlive = setInterval(()=>{ if (socket?.connected) socket.emit('ka', Date.now()); }, 10_000);
       clearTimeout(joinGuard);
-      addSys('입장 실패: ' + err); alert('입장 실패: ' + err); enableCreate();
     });
 
-    socket.on('peer_joined', function(name){ addSys(name + ' 님이 입장했습니다'); });
-    socket.on('peer_left', function(name){ addSys(name + ' 님이 퇴장했습니다'); });
-
-    socket.on('msg', function(p){
-      addMsg(false, p.nick, p.text, p.ts, p.id);
-      if (p.id && isAttended()) sendRead(p.id);
-      onIncoming('msg', p);
-    });
-    socket.on('file', function(p){
-      addFile(false, p.nick, { name: p.name, type: p.type, size: p.size, data: p.data, ts: p.ts }, p.id);
-      if (p.id && isAttended()) sendRead(p.id);
-      onIncoming('file', p);
+    socket.on('disconnect', reason => {
+      online.textContent='offline';
+      if (keepAlive) { clearInterval(keepAlive); keepAlive=null; }
+      addSys('연결이 끊어졌습니다: ' + reason + ' (자동 재연결 시도)'); enableCreate();
     });
 
-    socket.on('unread', function(u){
-      var row = document.querySelector('.msg.me[data-mid="'+u.id+'"]');
-      if (!row) return;
-      var badge = row.querySelector('.unread');
-      if (!badge) return;
-      if (u.count > 0){ badge.textContent = String(u.count); badge.style.display = 'inline'; }
-      else { badge.remove(); }
+    socket.on('join_error', err => { addSys('입장 실패: ' + err); alert('입장 실패: ' + err); enableCreate(); });
+    socket.on('peer_joined', name => addSys(name + ' 님이 입장했습니다'));
+    socket.on('peer_left',  name => addSys(name + ' 님이 퇴장했습니다'));
+
+    socket.on('msg',  p => { renderMessage({fromMe:false, name:p.nick, text:p.text, ts:p.ts, id:p.id}); if (p.id && State.attended) sendRead(p.id); if (!State.attended) { const icon = document.documentElement.getAttribute('data-theme')==='fox'?'🦊':'🐱'; Notify.desktop(icon+' 새 메시지', (p.nick||'상대')+': '+String(p.text||'').slice(0,80)); Notify.bump(); }});
+    socket.on('file', p => { renderMessage({fromMe:false, name:p.nick, file:{ name:p.name, type:p.type, size:p.size, data:p.data, ts:p.ts }, ts:p.ts, id:p.id}); if (p.id && State.attended) sendRead(p.id); if (!State.attended) { const icon = document.documentElement.getAttribute('data-theme')==='fox'?'🦊':'🐱'; Notify.desktop(icon+' 파일 도착', (p.nick||'상대')+'님이 '+(p.name||'파일')+'을 보냈습니다'); Notify.bump(); }});
+
+    socket.on('unread', u => {
+      const row = document.querySelector('.msg.me[data-mid="'+u.id+'"]'); if (!row) return;
+      const badge = row.querySelector('.unread'); if (!badge) return;
+      if (u.count > 0) { badge.textContent = String(u.count); badge.style.display = 'inline'; } else { badge.remove(); }
     });
 
-    socket.on('typing', function(p){ if (p && p.state){ showTyping(p.nick || '상대'); } else { hideTyping(); } });
-    socket.on('ka', function(){});
+    socket.on('typing', p => { p?.state ? typingFlag.show(p.nick||'상대') : typingFlag.hide(); });
+    socket.on('ka', () => {});
   };
 
   // 입력/타이핑/엔터
   $('#send').onclick = sendMsg;
-  textInput.addEventListener('compositionstart', function(){ composing = true; });
-  textInput.addEventListener('compositionend', function(){ composing = false; });
-  textInput.addEventListener('keydown', function(e){
-    if ((e.key === 'Enter' || e.key === 'NumpadEnter') && !e.shiftKey) {
-      if (!composing) { e.preventDefault(); sendMsg(); return; }
-    }
+  on(textInput, 'compositionstart', () => composing=true);
+  on(textInput, 'compositionend',  () => composing=false);
+  on(textInput, 'keydown', e => {
+    if ((e.key==='Enter' || e.key==='NumpadEnter') && !e.shiftKey) { if (!composing){ e.preventDefault(); sendMsg(); return; } }
     handleTyping();
   });
-  textInput.addEventListener('input', handleTyping);
-  textInput.addEventListener('blur', function(){ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } });
+  on(textInput, 'input', handleTyping);
+  on(textInput, 'blur', () => { if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } });
+
   function handleTyping(){
     if(!window.socket || !joined) return;
-    var n = Date.now();
-    if(!typingActive || n - lastTypingSent > 1000){
+    const now = Date.now();
+    if(!typingActive || now - lastTyping > 1000){
       window.socket.emit('typing', { room: myRoom, state: 1 });
-      typingActive = true; lastTypingSent = n;
+      typingActive = true; lastTyping = now;
     }
     clearTimeout(typingTimerSend);
-    typingTimerSend = setTimeout(function(){ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } }, 1500);
+    typingTimerSend = setTimeout(()=>{ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } }, 1500);
   }
-
-  // 파일 전송
-  $('#attach').onclick = function(){ fileInput.click(); };
-  fileInput.onchange = function(){ var files = Array.from(fileInput.files||[]); files.forEach(function(f){ sendFile(f); }); fileInput.value = ''; };
-  document.addEventListener('paste', function(e){
-    if(!joined) return;
-    var items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
-    items.forEach(function(it){ if (it.kind === 'file') { var f = it.getAsFile(); if (f) sendFile(f); } });
-  });
 
   function sendMsg(){
     if(!window.socket){ addSys('연결되지 않음'); return; }
-    var val = (textInput.value || '').trim(); if(!val) return;
-    var id = genId();
-    window.socket.emit('msg', { room: myRoom, id: id, text: val });
-    addMsg(true, myNick, val, Date.now(), id);
+    const val = (textInput.value||'').trim(); if(!val) return;
+    const id = genId();
+    window.socket.emit('msg', { room: myRoom, id, text: val });
+    renderMessage({fromMe:true, name:myNick, text:val, ts:Date.now(), id});
     textInput.value = '';
     if(typingActive){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; }
-    clearUnseen(); // 내가 보고 있을 때는 뱃지/플래시 초기화
+    Notify.clearUnseen();
   }
 
-  var ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel'];
-  var MAX_BYTES = 2_000_000;
+  // 파일 전송
+  const ALLOWED_TYPES = new Set(['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel']);
+  const MAX_BYTES = 2_000_000;
+
+  $('#attach').onclick = () => fileInput.click();
+  fileInput.onchange = () => { [...(fileInput.files||[])].forEach(sendFile); fileInput.value=''; };
+  on(document, 'paste', e => {
+    if(!joined) return;
+    const items = [...(e.clipboardData?.items||[])];
+    items.forEach(it => { if (it.kind === 'file'){ const f = it.getAsFile(); if (f) sendFile(f); } });
+  });
 
   function sendFile(file){
     if (!file) return;
-    if (file.size > MAX_BYTES) { addSys('파일이 너무 큽니다(최대 2MB).'); return; }
-    if (ALLOWED_TYPES.indexOf(file.type) === -1 && !(file.type||'').startsWith('image/')) { addSys('허용되지 않은 파일 형식입니다.'); return; }
-    var reader = new FileReader();
-    reader.onload = function(){
-      var dataUrl = reader.result;
-      var id = genId();
-      addFile(true, myNick, { name: file.name, type: file.type, size: file.size, data: dataUrl, ts: Date.now() }, id);
-      window.socket.emit('file', { room: myRoom, id: id, name: file.name, type: file.type, size: file.size, data: dataUrl });
+    if (file.size > MAX_BYTES) return addSys('파일이 너무 큽니다(최대 2MB).');
+    if (!(ALLOWED_TYPES.has(file.type) || (file.type||'').startsWith('image/'))) return addSys('허용되지 않은 파일 형식입니다.');
+    const rd = new FileReader();
+    rd.onload = () => {
+      const dataUrl = rd.result, id = genId();
+      renderMessage({fromMe:true, name:myNick, file:{ name:file.name, type:file.type, size:file.size, data:dataUrl, ts:Date.now() }, ts:Date.now(), id});
+      window.socket.emit('file', { room: myRoom, id, name:file.name, type:file.type, size:file.size, data:dataUrl });
     };
-    reader.readAsDataURL(file);
+    rd.readAsDataURL(file);
   }
 
-  chatBox.addEventListener('scroll', function(){ if (isAttended()) rescanUnread(); });
+  on(chatBox, 'scroll', () => { if (State.attended) rescanUnread(); });
 
   // Prefill
-  var url = new URL(window.location);
-  var r = url.searchParams.get('room');
-  var n = url.searchParams.get('nick');
+  const url = new URL(window.location);
+  const r = url.searchParams.get('room'), n = url.searchParams.get('nick');
   if(r){ roomInput.value = r; setInviteLink(r); }
   if(n){ nickInput.value = n; }
+})();
 </script>
 </body>
 </html>`);
 });
 
+// ===== Socket handlers =======================================================
 io.on('connection', (socket) => {
   socket.on('join', ({ room, nick, key }) => {
     room = sanitize(room, 40);
@@ -717,10 +589,8 @@ io.on('connection', (socket) => {
     if (!room || !nick) return socket.emit('join_error', '잘못된 파라미터');
 
     const r = getRoom(room);
-    // 키: 첫 입장자는 설정, 이후는 검증
-    if (r.users.size === 0) {
-      if (key) r.key = key;
-    } else {
+    if (r.users.size === 0) { if (key) r.key = key; }
+    else {
       if (r.key && key !== r.key) return socket.emit('join_error', '방 키가 일치하지 않습니다');
       if (!r.key && key) return socket.emit('join_error', '이미 만들어진 방에는 키를 새로 설정할 수 없어요');
     }
@@ -747,7 +617,7 @@ io.on('connection', (socket) => {
 
     r.lastMsgs.push({ t: now(), from: socket.id });
 
-    const recipients = Array.from(r.users).filter(sid => sid !== socket.id);
+    const recipients = [...r.users].filter(sid => sid !== socket.id);
     r.unread.set(id, new Set(recipients));
 
     socket.to(room).emit('msg', { id, nick, text, ts: now() });
@@ -758,6 +628,7 @@ io.on('connection', (socket) => {
   const ALLOWED_TYPES = new Set(['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel']);
   const MAX_BYTES = 2_000_000;
   const MAX_DATAURL = 7_000_000;
+
   socket.on('file', ({ room, id, name, type, size, data }) => {
     room = sanitize(room, 40);
     id = sanitize(id, 64);
@@ -773,7 +644,7 @@ io.on('connection', (socket) => {
     if (typeof data !== 'string' || data.slice(0,5) !== 'data:' || data.length > MAX_DATAURL) return socket.emit('info', '파일 데이터가 올바르지 않습니다.');
     if (isThrottled(r, socket.id, 5, 15_000)) return socket.emit('info', '전송이 너무 빠릅니다. 잠시 후 다시 시도하세요.');
 
-    const recipients = Array.from(r.users).filter(sid => sid !== socket.id);
+    const recipients = [...r.users].filter(sid => sid !== socket.id);
     r.unread.set(id, new Set(recipients));
 
     socket.to(room).emit('file', { id, nick, name, type, size, data, ts: now() });
@@ -804,7 +675,7 @@ io.on('connection', (socket) => {
   });
 
   // keep-alive echo
-  socket.on('ka', () => { socket.emit('ka', Date.now()); });
+  socket.on('ka', () => socket.emit('ka', now()));
 
   socket.on('disconnect', (reason) => {
     const room = socket.data.room;
