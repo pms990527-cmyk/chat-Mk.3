@@ -1,7 +1,7 @@
 /**
- * Multi-user Chat — Cloud Cat / Fox (Slim)
+ * Multi-user Chat — Cloud Cat / Fox (Slim, esc-eval fix)
  * - 기준본 기능 동일: 테마 전환, 탭 깜빡임, 데스크톱/소리 알림, 읽음 카운트, 이모지/파일, 타이핑, 재연결, keep-alive
- * - 간소화: 렌더러 통합(renderMessage), 알림/가시성/스크롤 헬퍼, 토글 모듈화, 중복 제거
+ * - 서버 템플릿 문자열 내 클라이언트 `${...}` 평가되던 부분 제거
  */
 const express = require('express');
 const http = require('http');
@@ -22,7 +22,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 8_000_000
 });
 
-const APP_VERSION = 'v-2025-09-22-slim-01';
+const APP_VERSION = 'v-2025-09-22-slim-02-escfix';
 
 // ===== In-memory rooms =======================================================
 /** room = { key, users:Set<sid>, lastMsgs:[], unread: Map<msgId, Set<sid>> } */
@@ -225,12 +225,12 @@ app.get('/', (req, res) => {
   const fileInput = $('#file'), textInput = $('#text');
   const themeSel = $('#themeSel'), brandTitle = $('#brandTitle'), brandIcon = $('#brandIcon'), statusIcon = $('#statusIcon');
   const favLink = $('#favicon');
+  const baseTitle = document.title;
 
   // ===== Theme & Favicon =====================================================
   const THEME_KEY='chat_theme';
   let favBaseEmoji = '🐱', favAlertEmoji = '🔔';
   let favBaseURL = '', favAlertURL = '';
-  const baseTitle = document.title;
 
   const drawFavicon = emoji => {
     const c = document.createElement('canvas'); c.width = 64; c.height = 64;
@@ -325,11 +325,11 @@ app.get('/', (req, res) => {
       if (!flashOn || flasher) return;
       flasher = setInterval(() => {
         flip = !flip;
-        document.title = flip ? '🔔 ' + unseenTotal + ' 새 메시지' : '${esc(baseTitle)}';
+        document.title = flip ? '🔔 ' + unseenTotal + ' 새 메시지' : baseTitle;
         setFavicon(flip ? favAlertURL : favBaseURL);
       }, 900);
     };
-    const stopFlash = () => { if (flasher){ clearInterval(flasher); flasher=null; } document.title='${esc(baseTitle)}'; setFavicon(favBaseURL); };
+    const stopFlash = () => { if (flasher){ clearInterval(flasher); flasher=null; } document.title = baseTitle; setFavicon(favBaseURL); };
 
     const bump = () => { unseenTotal++; badge.textContent=String(unseenTotal); badge.style.display='inline-block'; startFlash(); if (soundOn) beep(); };
     const clearUnseen = () => { unseenTotal=0; badge.style.display='none'; stopFlash(); };
